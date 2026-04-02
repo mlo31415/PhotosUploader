@@ -247,6 +247,8 @@ class PhotosUploader:
             # Album selection sits at the very top of the upload panel
             album_btn_row = ttk.Frame(frame)
             album_btn_row.pack(fill=tk.X, pady=(0, 2))
+            ttk.Button(album_btn_row, text="Upload Queue",
+                       command=self._upload_queue).pack(side=tk.LEFT, padx=2)
             ttk.Button(album_btn_row, text="Change Upload Album",
                        command=self.open_output_folder).pack(side=tk.LEFT, padx=2)
 
@@ -1046,6 +1048,21 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Piwigo
     # -----------------------------------------------------------------------
+
+    def _upload_queue(self):
+        if not self.output_paths:
+            self.set_status("Upload queue is empty.")
+            return
+        album = self.upload_album_var.get()
+        if not album or album == "(none)":
+            messagebox.showwarning("No album selected",
+                                   "Please select an upload album first.",
+                                   parent=self.root)
+            return
+        messagebox.showinfo("Upload Queue",
+                            f"Upload of {len(self.output_paths)} photo(s) "
+                            f"to '{album}' is not yet implemented.",
+                            parent=self.root)
 
     def _download_album_hierarchy(self):
         DownloadAlbumStructure.run(self.root, self.set_status)
