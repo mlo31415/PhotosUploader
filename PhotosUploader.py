@@ -101,10 +101,9 @@ CUSTOM_FIELDS = [
     ('title', 'Title'),
     ('caption', 'Caption'),
     ('tags', 'Tags (comma-separated)'),
-    ('photo_source', 'Photo Source'),
+    ('photo_source', 'Photographer/Source'),
     ('notes', 'Notes'),
     ('output_filename', 'Output Filename'),
-    ('output_folder', 'Target Album'),
 ]
 
 
@@ -385,10 +384,6 @@ class PhotosUploader:
                 entry = ttk.Entry(custom_frame, textvariable=var, width=40)
                 entry.grid(row=i, column=1, sticky=tk.EW, pady=2)
                 self.custom_vars[key] = var
-                if key == 'output_folder':
-                    ttk.Button(custom_frame, text="…", width=2,
-                               command=lambda v=var: self._pick_folder(v)).grid(
-                        row=i, column=2, padx=2)
         custom_frame.columnconfigure(1, weight=1)
 
         def _on_photo_source_changed(*_):
