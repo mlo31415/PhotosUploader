@@ -154,6 +154,7 @@ class PhotosUploader:
         self.photo_image = None     # ImageTk reference
         self.custom_data = {}       # path -> dict of custom field values
         self.status_var = tk.StringVar(value="Ready.")
+        self.upload_album_var = tk.StringVar(value="(none)")
         self.thumb_cache = {}
         self.state_data = load_state()
 
@@ -227,7 +228,7 @@ class PhotosUploader:
         main_pane.add(center_frame, weight=3)
 
         # RIGHT: Output queue
-        right_frame = self._build_queue_panel(main_pane, "Output Queue",
+        right_frame = self._build_queue_panel(main_pane, "Upload Queue",
                                               is_input=False)
         main_pane.add(right_frame, weight=1)
 
@@ -242,6 +243,19 @@ class PhotosUploader:
     def _build_queue_panel(self, parent, title: str, is_input: bool) -> ttk.Frame:
         frame = ttk.LabelFrame(parent, text=title, padding=4)
 
+        if not is_input:
+            # Album selection sits at the very top of the upload panel
+            album_btn_row = ttk.Frame(frame)
+            album_btn_row.pack(fill=tk.X, pady=(0, 2))
+            ttk.Button(album_btn_row, text="Change Upload Album",
+                       command=self.open_output_folder).pack(side=tk.LEFT, padx=2)
+
+            album_display_row = ttk.Frame(frame)
+            album_display_row.pack(fill=tk.X, pady=(0, 4))
+            ttk.Label(album_display_row, text="Album:").pack(side=tk.LEFT, padx=(2, 4))
+            ttk.Label(album_display_row, textvariable=self.upload_album_var,
+                      foreground='gray', anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         # Buttons
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill=tk.X, pady=(0, 4))
@@ -254,7 +268,6 @@ class PhotosUploader:
         else:
             ttk.Button(btn_row, text="Remove", command=self.remove_selected_output).pack(side=tk.LEFT, padx=2)
             ttk.Button(btn_row, text="← Return", command=self.return_to_input).pack(side=tk.LEFT, padx=2)
-            ttk.Button(btn_row, text="Open Folder", command=self.open_output_folder).pack(side=tk.LEFT, padx=2)
 
         # Count label
         if is_input:
@@ -287,7 +300,6 @@ class PhotosUploader:
             self.input_list = lb
             lb.bind('<<ListboxSelect>>', self._on_input_select)
             lb.bind('<Double-Button-1>', lambda e: self.process_current())
-            # Drag-and-drop onto the input list
             if DND_AVAILABLE:
                 lb.drop_target_register(DND_FILES)
                 lb.dnd_bind('<<Drop>>', self._on_drop)
