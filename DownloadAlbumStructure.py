@@ -39,7 +39,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 PARAMS_FILE          = Path(".") / "PhotosUploader Params.json"
 ALBUM_HIERARCHY_FILE = Path(".") / "AlbumHierarchy.json"
-FILE_INDEX_FILE      = Path(".") / "FileIndex.json"
+FILE_INDEX_FILE      = Path(".") / "FileDict.json"
 REQUIRED_PARAMS      = ("url", "username", "password")
 
 

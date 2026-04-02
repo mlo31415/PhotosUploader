@@ -186,6 +186,7 @@ class PhotosUploader:
         ttk.Button(toolbar, text="🗑  Clear Output", command=self.clear_output).pack(side=tk.LEFT, padx=2)
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         ttk.Button(toolbar, text="☁  Download Album Hierarchy", command=self._download_album_hierarchy).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="☁  Download File List", command=self._download_file_list).pack(side=tk.LEFT, padx=2)
 
         # ── Second row: processing options bar ───────────────────────────
         opts = ttk.LabelFrame(self.root, text="Processing Options", padding=4)
@@ -1088,6 +1089,9 @@ class PhotosUploader:
 
     def _download_album_hierarchy(self):
         DownloadAlbumStructure.run(self.root, self.set_status)
+
+    def _download_file_list(self):
+        DownloadAlbumStructure.download_file_index(self.root, self.set_status)
 
     # -----------------------------------------------------------------------
     # Window geometry persistence
