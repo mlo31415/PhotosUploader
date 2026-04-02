@@ -6,8 +6,18 @@ it to AlbumHierarchy.json, and shows a modal progress dialog while working.
 Public API
 ----------
     run(parent, set_status_cb)
-        parent        – a tkinter widget used as the dialog parent
-        set_status_cb – callable(str) that updates the caller's status bar
+        Download album hierarchy → AlbumHierarchy.json.
+
+    add_album(parent, set_status_cb)
+        Create a new album on the server and refresh AlbumHierarchy.json.
+
+    pick_album(parent, set_status_cb, on_select_cb)
+        Show a tree-picker dialog; calls on_select_cb(album_id, fullname).
+
+    download_file_index(parent, set_status_cb)
+        Optional: walk every album, build filename → [album fullname, …]
+        and write FileIndex.json.  Useful for detecting duplicates before
+        uploading.
 """
 
 import json
@@ -29,6 +39,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 PARAMS_FILE          = Path(".") / "PhotosUploader Params.json"
 ALBUM_HIERARCHY_FILE = Path(".") / "AlbumHierarchy.json"
+FILE_INDEX_FILE      = Path(".") / "FileIndex.json"
 REQUIRED_PARAMS      = ("url", "username", "password")
 
 
@@ -124,6 +135,28 @@ class PiwigoClient:
         result = self._call("pwg.categories.add", params)
         return int(result.get("id", 0))
 
+    def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
+        """Return all images in a category, handling pagination automatically.
+
+        Each dict has at least 'file' (filename) and 'id' (image id).
+        """
+        images = []
+        page = 0
+        while True:
+            result = self._call("pwg.categories.getImages", {
+                "cat_id":   cat_id,
+                "per_page": per_page,
+                "page":     page,
+            })
+            batch = result.get("images", [])
+            images.extend(batch)
+            paging = result.get("paging", {})
+            total  = int(paging.get("total_count", len(images)))
+            if len(images) >= total or not batch:
+                break
+            page += 1
+        return images
+
 
 # ---------------------------------------------------------------------------
 # Hierarchy builder
@@ -188,6 +221,53 @@ def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
     with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
         json.dump(hierarchy, f, indent=2, ensure_ascii=False)
     return len(flat)
+
+
+# ---------------------------------------------------------------------------
+# File-index builder
+# ---------------------------------------------------------------------------
+def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
+                               progress_cb) -> dict[str, list[str]]:
+    """Walk every album, collect filenames, and write FileIndex.json.
+
+    progress_cb(done: int, total: int, album_name: str) is called after each
+    album is processed.  It must be safe to call from a background thread.
+
+    Returns the completed index dict: {filename: [fullname, …], …}.
+    The fullname used for each album is the breadcrumb stored in the flat
+    album list (e.g. "Fan Photos / Ackermansion").
+    """
+    # Build a fast id → fullname map from the flat list
+    fullname_by_id: dict[int, str] = {}
+    for cat in flat_albums:
+        cat_id   = int(cat["id"])
+        fullname = cat.get("name", "")          # fullname=true → breadcrumb
+        fullname_by_id[cat_id] = fullname
+
+    index: dict[str, list[str]] = {}
+    total = len(flat_albums)
+
+    for done, cat in enumerate(flat_albums, 1):
+        cat_id   = int(cat["id"])
+        fullname = fullname_by_id[cat_id]
+        # Strip the short name for progress reporting
+        short    = fullname.rsplit(" / ", 1)[-1]
+        progress_cb(done, total, short)
+
+        images = client.get_album_images(cat_id)
+        for img in images:
+            filename = img.get("file", "").strip()
+            if not filename:
+                continue
+            if filename not in index:
+                index[filename] = []
+            if fullname not in index[filename]:
+                index[filename].append(fullname)
+
+    with open(FILE_INDEX_FILE, "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
+
+    return index
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +346,12 @@ def run(parent: tk.Widget, set_status_cb):
                 parent.after(0, lambda m=msg: set_step(m))
 
             n = _fetch_and_save_hierarchy(client, step)
+
+            # # TEMPORARY: also build the file index for performance testing
+            # parent.after(0, lambda: set_step("Building file index…"))
+            # flat = client.get_albums()
+            # _fetch_and_save_file_index(client, flat, lambda d, t, nm: None)
+
             parent.after(0, lambda: finish_ok(n))
         except Exception as exc:
             err = str(exc)
@@ -644,3 +730,109 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
     ttk.Button(btn_frame, text="Select",
                command=on_select).pack(side=tk.RIGHT)
     dlg.bind("<Return>", lambda e: on_select())
+
+
+# ---------------------------------------------------------------------------
+# File-index download (optional)
+# ---------------------------------------------------------------------------
+def download_file_index(parent: tk.Widget, set_status_cb):
+    """Walk every album on the server and build a filename → album-path index.
+
+    The result is written to FileIndex.json as:
+        { "photo.jpg": ["Album / SubAlbum", "Other Album"], … }
+
+    A determinate progress dialog shows one row per album processed.
+    If AlbumHierarchy.json is missing or stale the hierarchy is refreshed
+    first (re-uses the same credentials and session).
+    """
+    if not REQUESTS_AVAILABLE:
+        messagebox.showerror(
+            "Missing dependency",
+            "The 'requests' library is required.\nRun: pip install requests",
+            parent=parent,
+        )
+        return
+
+    try:
+        params = load_params()
+    except (FileNotFoundError, ValueError) as exc:
+        messagebox.showerror("Configuration error", str(exc), parent=parent)
+        return
+
+    # ── Progress dialog ───────────────────────────────────────────────────────
+    dlg = tk.Toplevel(parent)
+    dlg.title("Downloading File Index")
+    dlg.resizable(False, False)
+    dlg.grab_set()
+
+    parent.update_idletasks()
+    rx = parent.winfo_x() + parent.winfo_width()  // 2
+    ry = parent.winfo_y() + parent.winfo_height() // 2
+    dlg.geometry(f"400x130+{rx - 200}+{ry - 65}")
+
+    ttk.Label(dlg, text="Building file index from Piwigo…",
+              padding=(12, 10, 12, 2)).pack()
+
+    step_var = tk.StringVar(value="Connecting…")
+    ttk.Label(dlg, textvariable=step_var, foreground="gray",
+              padding=(12, 0, 12, 4)).pack()
+
+    bar = ttk.Progressbar(dlg, mode="determinate", length=360)
+    bar.pack(padx=12, pady=(0, 12))
+
+    def set_step(msg):
+        step_var.set(msg)
+        set_status_cb(msg)
+
+    def on_progress(done, total, album_name):
+        parent.after(0, lambda d=done, t=total, n=album_name: _apply_progress(d, t, n))
+
+    def _apply_progress(done, total, album_name):
+        bar["maximum"] = total
+        bar["value"]   = done
+        step_var.set(f"({done}/{total})  {album_name}")
+
+    def finish_ok(n_files, n_albums):
+        bar.stop()
+        dlg.destroy()
+        msg = (f"File index built: {n_files:,} unique file(s) across "
+               f"{n_albums} album(s). Written to {FILE_INDEX_FILE.name}.")
+        set_status_cb(msg)
+
+    def finish_err(err):
+        bar.stop()
+        dlg.destroy()
+        messagebox.showerror("Piwigo error", err, parent=parent)
+        set_status_cb("File index download failed.")
+
+    # ── Background worker ─────────────────────────────────────────────────────
+    def worker():
+        client = PiwigoClient(
+            params["url"],
+            params["username"],
+            params["password"],
+            verify_ssl=params.get("verify_ssl", True),
+        )
+        try:
+            parent.after(0, lambda: set_step("Logging in…"))
+            client.login(params["username"], params["password"])
+
+            # Refresh hierarchy if stale so flat_albums is up to date
+            parent.after(0, lambda: set_step("Fetching album list…"))
+            flat_albums = client.get_albums()
+
+            if not _hierarchy_is_fresh():
+                parent.after(0, lambda: set_step("Saving album hierarchy…"))
+                hierarchy = _build_hierarchy(flat_albums)
+                with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(hierarchy, f, indent=2, ensure_ascii=False)
+
+            index = _fetch_and_save_file_index(client, flat_albums, on_progress)
+            parent.after(0, lambda: finish_ok(len(index), len(flat_albums)))
+        except Exception as exc:
+            err = str(exc)
+            parent.after(0, lambda: finish_err(err))
+        finally:
+            client.logout()
+
+    threading.Thread(target=worker, daemon=True).start()
