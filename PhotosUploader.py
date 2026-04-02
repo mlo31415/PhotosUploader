@@ -247,8 +247,10 @@ class PhotosUploader:
             # Album selection sits at the very top of the upload panel
             album_btn_row = ttk.Frame(frame)
             album_btn_row.pack(fill=tk.X, pady=(0, 2))
-            ttk.Button(album_btn_row, text="Upload Queue",
-                       command=self._upload_queue).pack(side=tk.LEFT, padx=2)
+            self.upload_queue_btn = ttk.Button(album_btn_row, text="Upload Queue",
+                                               command=self._upload_queue,
+                                               state=tk.DISABLED)
+            self.upload_queue_btn.pack(side=tk.LEFT, padx=2)
             ttk.Button(album_btn_row, text="Change Upload Album",
                        command=self.open_output_folder).pack(side=tk.LEFT, padx=2)
 
@@ -292,7 +294,10 @@ class PhotosUploader:
 
         if is_input:
             ttk.Button(btn_row, text="Add…", command=self.add_photos_dialog).pack(side=tk.LEFT, padx=2)
-            ttk.Button(btn_row, text="Remove", command=self.remove_selected_input).pack(side=tk.LEFT, padx=2)
+            self.input_remove_btn = ttk.Button(btn_row, text="Remove",
+                                               command=self.remove_selected_input,
+                                               state=tk.DISABLED)
+            self.input_remove_btn.pack(side=tk.LEFT, padx=2)
             ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side=tk.LEFT)
             ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side=tk.LEFT)
         else:
@@ -357,7 +362,10 @@ class PhotosUploader:
         nav = ttk.Frame(left_col)
         nav.pack(fill=tk.X, pady=(0, 4))
         ttk.Button(nav, text="◀ Prev",   command=self.prev_photo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(nav, text="↺ Revert", command=self._revert_photo).pack(side=tk.LEFT, padx=2)
+        self.revert_btn = ttk.Button(nav, text="↺ Revert",
+                                     command=self._revert_photo,
+                                     state=tk.DISABLED)
+        self.revert_btn.pack(side=tk.LEFT, padx=2)
         ttk.Button(nav, text="Next ▶",   command=self.next_photo).pack(side=tk.LEFT, padx=2)
 
         ttk.Button(left_col, text="☁ Queue for Upload",
@@ -656,6 +664,8 @@ class PhotosUploader:
             self._save_current_custom_fields()
             self.current_photo = self.input_paths[sel[0]]
             self._load_photo(self.current_photo)
+        else:
+            self._update_button_states()
 
     def _on_output_select(self, event):
         sel = self.output_list.curselection()
@@ -756,8 +766,8 @@ class PhotosUploader:
         self._display_photo(path)
         self._load_exif(path)
         self._load_custom_fields(path)
-        # Show full path under the nav row
         self.path_var.set(path)
+        self._update_button_states()
 
     def _display_photo(self, path: str):
         if not PIL_AVAILABLE:
@@ -907,6 +917,7 @@ class PhotosUploader:
                     widget.delete('1.0', tk.END)
                 else:
                     widget.set('')
+            self._update_button_states()
 
     def process_current(self):
         if not self.current_photo:
@@ -1029,9 +1040,19 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Utilities
     # -----------------------------------------------------------------------
+    def _update_button_states(self):
+        self.upload_queue_btn.config(
+            state=tk.NORMAL if self.output_paths else tk.DISABLED)
+        self.revert_btn.config(
+            state=tk.NORMAL if self.current_photo else tk.DISABLED)
+        has_input_sel = bool(self.input_list.curselection())
+        self.input_remove_btn.config(
+            state=tk.NORMAL if has_input_sel else tk.DISABLED)
+
     def _update_counts(self):
         self.input_count_var.set(f"{len(self.input_paths)} item(s)")
         self.output_count_var.set(f"{len(self.output_paths)} item(s)")
+        self._update_button_states()
 
     def set_status(self, msg: str):
         self.status_var.set(msg)
