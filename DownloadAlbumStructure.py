@@ -135,10 +135,11 @@ def _build_hierarchy(flat: list) -> list:
         id, name, fullname, nb_images, total_nb_images, children
     Root nodes (id_uppercat absent, null, or "0") appear at the top level.
     """
-    by_id = {}
+    by_id: dict[int, dict] = {}
     for cat in flat:
+        node_id = int(cat["id"])
         node = {
-            "id":              int(cat["id"]),
+            "id":              node_id,
             "name":            cat.get("name", ""),
             "nb_images":       int(cat.get("nb_images", 0)),
             "total_nb_images": int(cat.get("total_nb_images", 0)),
@@ -149,7 +150,7 @@ def _build_hierarchy(flat: list) -> list:
         parts = node["name"].rsplit(" / ", 1)
         node["fullname"] = node["name"]
         node["name"]     = parts[-1]
-        by_id[node["id"]] = node
+        by_id[node_id] = node
 
     roots = []
     for cat in flat:
