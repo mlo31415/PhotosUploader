@@ -172,48 +172,10 @@ class PhotosUploader:
         toolbar = ttk.Frame(self.root, padding=4)
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        ttk.Button(toolbar, text="➕ Add Photos…", command=self.add_photos_dialog).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="🗂  Add Folder…", command=self.add_folder_dialog).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="➕ Add New Album", command=self._add_new_album).pack(side=tk.LEFT, padx=2)
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        ttk.Button(toolbar, text="▶  Process Current →", command=self.process_current).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="⏩ Process All →", command=self.process_all).pack(side=tk.LEFT, padx=2)
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        ttk.Button(toolbar, text="💾 Save Metadata", command=self.save_metadata).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="📋 Export Log…", command=self.export_log).pack(side=tk.LEFT, padx=2)
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        ttk.Button(toolbar, text="🗑  Clear Input", command=self.clear_input).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="🗑  Clear Output", command=self.clear_output).pack(side=tk.LEFT, padx=2)
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         ttk.Button(toolbar, text="☁  Download Album Hierarchy", command=self._download_album_hierarchy).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="☁  Download File List", command=self._download_file_list).pack(side=tk.LEFT, padx=2)
-
-        # ── Second row: processing options bar ───────────────────────────
-        opts = ttk.LabelFrame(self.root, text="Processing Options", padding=4)
-        opts.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 2))
-
-        # Rename option
-        ttk.Label(opts, text="Rename:").pack(side=tk.LEFT, padx=(0, 2))
-        self.rename_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="Use Output Filename field", variable=self.rename_var).pack(side=tk.LEFT, padx=4)
-
-        ttk.Separator(opts, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-
-        # Copy/Move
-        ttk.Label(opts, text="Action:").pack(side=tk.LEFT, padx=(0, 2))
-        self.action_var = tk.StringVar(value="none")
-        ttk.Radiobutton(opts, text="None", variable=self.action_var, value="none").pack(side=tk.LEFT)
-        ttk.Radiobutton(opts, text="Copy to Target Album", variable=self.action_var, value="copy").pack(side=tk.LEFT)
-        ttk.Radiobutton(opts, text="Move to Target Album", variable=self.action_var, value="move").pack(side=tk.LEFT)
-
-        ttk.Separator(opts, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-
-        # Default target album
-        ttk.Label(opts, text="Default Target Album:").pack(side=tk.LEFT, padx=(0, 2))
-        self.default_out_var = tk.StringVar(value="")
-        ttk.Entry(opts, textvariable=self.default_out_var, width=30).pack(side=tk.LEFT, padx=2)
-        ttk.Button(opts, text="…", width=2,
-                   command=lambda: self._pick_folder(self.default_out_var)).pack(side=tk.LEFT)
 
         # ── Main three-panel area ─────────────────────────────────────────
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -947,52 +909,19 @@ class PhotosUploader:
         threading.Thread(target=worker, daemon=True).start()
 
     def _process_photo(self, path: str):
-        """Core processing logic for a single photo."""
+        """Move a photo from the input queue to the output queue."""
         try:
-            custom = self.custom_data.get(path, {})
-            action = self.action_var.get()
-            dest_path = path  # default: no file change
-
-            # --- Determine output folder ---
-            out_folder = (custom.get('output_folder') or
-                          self.default_out_var.get() or
-                          os.path.dirname(path))
-            os.makedirs(out_folder, exist_ok=True)
-
-            # --- Determine output filename ---
-            out_name = os.path.basename(path)
-            if self.rename_var.get() and custom.get('output_filename'):
-                candidate = custom['output_filename'].strip()
-                if candidate:
-                    if not Path(candidate).suffix:
-                        candidate += Path(path).suffix
-                    out_name = candidate
-
-            dest_path = os.path.join(out_folder, out_name)
-
-            # --- Copy or move ---
-            if action in ('copy', 'move') and dest_path != path:
-                if action == 'copy':
-                    shutil.copy2(path, dest_path)
-                else:
-                    shutil.move(path, dest_path)
-
-            # --- Write EXIF metadata ---
-            if PIEXIF_AVAILABLE and action in ('copy', 'move'):
-                self._write_exif(dest_path, path)
-
-            # --- Move to output queue ---
             if path in self.input_paths:
                 idx = self.input_paths.index(path)
                 self.input_paths.pop(idx)
                 self.input_list.delete(idx)
 
-            if dest_path not in self.output_paths:
-                self.output_paths.append(dest_path)
-                self.output_list.insert(tk.END, os.path.basename(dest_path))
+            if path not in self.output_paths:
+                self.output_paths.append(path)
+                self.output_list.insert(tk.END, os.path.basename(path))
 
             self._update_counts()
-            self.set_status(f"Processed: {os.path.basename(dest_path)}")
+            self.set_status(f"Processed: {os.path.basename(path)}")
 
         except Exception as e:
             messagebox.showerror("Processing Error",
