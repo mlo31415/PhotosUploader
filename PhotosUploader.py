@@ -300,91 +300,107 @@ class PhotosUploader:
     def _build_center_panel(self, parent) -> ttk.Frame:
         frame = ttk.Frame(parent)
 
-        # ── Photo display ─────────────────────────────────────────────────
-        viewer_frame = ttk.LabelFrame(frame, text="Photo Viewer", padding=4)
-        viewer_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+        # Vertical paned window: viewer (top, smaller) / fields row (bottom)
+        vpane = ttk.PanedWindow(frame, orient=tk.VERTICAL)
+        vpane.pack(fill=tk.BOTH, expand=True)
 
-        # Nav buttons
-        nav = ttk.Frame(viewer_frame)
-        nav.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(nav, text="◀ Prev", command=self.prev_photo).pack(side=tk.LEFT, padx=2)
+        # ── Photo display (top pane) ──────────────────────────────────────
+        viewer_frame = ttk.LabelFrame(vpane, text="Photo Viewer", padding=4)
+        vpane.add(viewer_frame, weight=1)
+
+        # ── Left column: nav buttons, filename, dims, path ───────────────
+        left_col = ttk.Frame(viewer_frame)
+        left_col.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
+
+        nav = ttk.Frame(left_col)
+        nav.pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(nav, text="◀ Prev",   command=self.prev_photo).pack(side=tk.LEFT, padx=2)
         ttk.Button(nav, text="↺ Revert", command=self._revert_photo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(nav, text="Next ▶", command=self.next_photo).pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav, text="Next ▶",   command=self.next_photo).pack(side=tk.LEFT, padx=2)
+
         self.photo_label_var = tk.StringVar(value="No photo selected")
-        ttk.Label(nav, textvariable=self.photo_label_var, font=('TkDefaultFont', 9, 'italic')).pack(
-            side=tk.LEFT, padx=10)
+        ttk.Label(left_col, textvariable=self.photo_label_var,
+                  font=('TkDefaultFont', 9, 'italic'),
+                  anchor=tk.W).pack(fill=tk.X, pady=(0, 2))
+
         self.photo_dim_var = tk.StringVar(value="")
-        ttk.Label(nav, textvariable=self.photo_dim_var).pack(side=tk.RIGHT, padx=4)
+        ttk.Label(left_col, textvariable=self.photo_dim_var,
+                  anchor=tk.W).pack(fill=tk.X, pady=(0, 6))
 
-        # Path display (between nav row and image)
+        # Path display — wraps to the actual column width
         self.path_var = tk.StringVar(value="")
-        ttk.Label(viewer_frame, textvariable=self.path_var, anchor=tk.W,
-                  font=('TkDefaultFont', 9)).pack(fill=tk.X, padx=4, pady=(0, 4))
+        path_label = ttk.Label(left_col, textvariable=self.path_var,
+                               font=('TkDefaultFont', 9),
+                               anchor=tk.NW, justify=tk.LEFT, wraplength=220)
+        path_label.pack(fill=tk.X)
 
-        # Canvas for image
-        self.canvas = tk.Canvas(viewer_frame, bg='#1a1a1a', cursor='crosshair')
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        def _update_wraplength(event):
+            path_label.configure(wraplength=max(event.width - 4, 50))
+        path_label.bind('<Configure>', _update_wraplength)
+
+        # ── Canvas — right side, narrower ────────────────────────────────
+        self.canvas = tk.Canvas(viewer_frame, bg='#1a1a1a', cursor='crosshair',
+                                height=200)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.bind('<Configure>', self._on_canvas_resize)
 
-        # ── Fields notebook ───────────────────────────────────────────────
-        nb = ttk.Notebook(frame)
-        nb.pack(fill=tk.X, pady=(0, 2))
+        # ── Bottom pane: Custom Fields / EXIF stacked vertically ─────────
+        hpane = ttk.PanedWindow(vpane, orient=tk.VERTICAL)
+        vpane.add(hpane, weight=2)
 
-        # Tab 1: Custom fields
-        custom_tab = ttk.Frame(nb, padding=6)
-        nb.add(custom_tab, text="Custom Fields")
+        # ── Custom Fields (left) ──────────────────────────────────────────
+        custom_frame = ttk.LabelFrame(hpane, text="Custom Fields", padding=6)
+        hpane.add(custom_frame, weight=1)
+
         self.custom_vars = {}
         for i, (key, label) in enumerate(CUSTOM_FIELDS):
-            ttk.Label(custom_tab, text=label + ":", width=22, anchor=tk.E).grid(
+            ttk.Label(custom_frame, text=label + ":", width=22, anchor=tk.E).grid(
                 row=i, column=0, sticky=tk.E, pady=2, padx=(0, 4))
             if key == 'notes':
-                # Multi-line notes
-                txt = tk.Text(custom_tab, height=3, width=40, wrap=tk.WORD,
+                txt = tk.Text(custom_frame, height=3, width=40, wrap=tk.WORD,
                               font=('TkDefaultFont', 9))
                 txt.grid(row=i, column=1, sticky=tk.EW, pady=2)
                 self.custom_vars[key] = txt
             else:
                 var = tk.StringVar()
-                entry = ttk.Entry(custom_tab, textvariable=var, width=40)
+                entry = ttk.Entry(custom_frame, textvariable=var, width=40)
                 entry.grid(row=i, column=1, sticky=tk.EW, pady=2)
                 self.custom_vars[key] = var
                 if key == 'output_folder':
-                    ttk.Button(custom_tab, text="…", width=2,
+                    ttk.Button(custom_frame, text="…", width=2,
                                command=lambda v=var: self._pick_folder(v)).grid(
                         row=i, column=2, padx=2)
-            custom_tab.columnconfigure(1, weight=1)
+        custom_frame.columnconfigure(1, weight=1)
 
-        # Tab 2: EXIF / metadata (read + some editable)
-        exif_tab = ttk.Frame(nb, padding=6)
-        nb.add(exif_tab, text="EXIF / Metadata")
+        # ── EXIF / Metadata (right) ───────────────────────────────────────
+        exif_frame = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
+        hpane.add(exif_frame, weight=1)
 
-        exif_scroll = ttk.Scrollbar(exif_tab, orient=tk.VERTICAL)
-        self.exif_tree = ttk.Treeview(exif_tab, columns=('value',),
-                                      show='headings',
-                                      yscrollcommand=exif_scroll.set,
-                                      height=8)
-        exif_scroll.config(command=self.exif_tree.yview)
-        self.exif_tree.heading('value', text='Value')
-        self.exif_tree.column('value', width=300)
-        # Use tag column for the key
-        self.exif_tree['columns'] = ('key', 'value')
-        self.exif_tree.heading('key', text='Field')
-        self.exif_tree.heading('value', text='Value')
-        self.exif_tree.column('key', width=180)
-        self.exif_tree.column('value', width=320)
-        self.exif_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        exif_scroll.pack(side=tk.LEFT, fill=tk.Y)
-
-        # Editable EXIF row
-        edit_row = ttk.Frame(exif_tab)
-        edit_row.pack(fill=tk.X, pady=4)
+        # Edit row packed first (side=BOTTOM) so the tree fills remaining space
+        edit_row = ttk.Frame(exif_frame)
+        edit_row.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
         ttk.Label(edit_row, text="Edit selected value:").pack(side=tk.LEFT, padx=(0, 4))
         self.exif_edit_var = tk.StringVar()
-        ttk.Entry(edit_row, textvariable=self.exif_edit_var, width=30).pack(side=tk.LEFT, padx=2)
-        ttk.Button(edit_row, text="Apply", command=self._apply_exif_edit).pack(side=tk.LEFT, padx=2)
-        self.exif_tree.bind('<<TreeviewSelect>>', self._on_exif_select)
+        ttk.Entry(edit_row, textvariable=self.exif_edit_var, width=30).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(edit_row, text="Apply", command=self._apply_exif_edit).pack(
+            side=tk.LEFT, padx=2)
 
-        # (File Info tab removed — path is shown above the image)
+        tree_frame = ttk.Frame(exif_frame)
+        tree_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        exif_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        self.exif_tree = ttk.Treeview(tree_frame, columns=('key', 'value'),
+                                      show='headings',
+                                      yscrollcommand=exif_scroll.set)
+        exif_scroll.config(command=self.exif_tree.yview)
+        self.exif_tree.heading('key', text='Field')
+        self.exif_tree.heading('value', text='Value')
+        self.exif_tree.column('key', width=160)
+        self.exif_tree.column('value', width=260)
+        self.exif_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        exif_scroll.pack(side=tk.LEFT, fill=tk.Y)
+        self.exif_tree.bind('<<TreeviewSelect>>', self._on_exif_select)
 
         return frame
 
