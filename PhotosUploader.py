@@ -157,6 +157,8 @@ class PhotosUploader:
         self.upload_album_var = tk.StringVar(value="(none)")
         self.thumb_cache = {}
         self.state_data = load_state()
+        if self.state_data.get("upload_album"):
+            self.upload_album_var.set(self.state_data["upload_album"])
 
         self._build_ui()
         self._bind_shortcuts()
@@ -1051,6 +1053,8 @@ class PhotosUploader:
         x, y = self.root.winfo_x(), self.root.winfo_y()
         w, h = self.root.winfo_width(), self.root.winfo_height()
         self.state_data["geometry"] = f"{w}x{h}+{x}+{y}"
+        album = self.upload_album_var.get()
+        self.state_data["upload_album"] = album if album != "(none)" else ""
         save_state(self.state_data)
         self.root.destroy()
 
