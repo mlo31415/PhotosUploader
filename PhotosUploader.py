@@ -862,38 +862,49 @@ class PhotosUploader:
     # Processing
     # -----------------------------------------------------------------------
     def _queue_for_upload(self):
-        """Move the current photo to the output queue and clear the viewer."""
+        """Move the current photo to the output queue, then show the next one."""
         if not self.current_photo:
             self.set_status("No photo selected.")
             return
         self._save_current_custom_fields()
         path = self.current_photo
 
+        # Capture position before removing so we can select the successor
+        next_idx = None
         if path in self.input_paths:
             idx = self.input_paths.index(path)
             self.input_paths.pop(idx)
             self.input_list.delete(idx)
+            if self.input_paths:
+                next_idx = min(idx, len(self.input_paths) - 1)
 
         if path not in self.output_paths:
             self.output_paths.append(path)
             self.output_list.insert(tk.END, os.path.basename(path))
 
-        # Clear the viewer
-        self.current_photo = None
-        self.photo_image = None
-        self.photo_label_var.set("No photo selected")
-        self.photo_dim_var.set("")
-        self.path_var.set("")
-        self.canvas.delete('all')
-        self.exif_tree.delete(*self.exif_tree.get_children())
-        for widget in self.custom_vars.values():
-            if isinstance(widget, tk.Text):
-                widget.delete('1.0', tk.END)
-            else:
-                widget.set('')
-
         self._update_counts()
         self.set_status(f"Queued for upload: {os.path.basename(path)}")
+
+        # Advance to the next photo, or clear the viewer if the queue is empty
+        if next_idx is not None:
+            self.input_list.selection_clear(0, tk.END)
+            self.input_list.selection_set(next_idx)
+            self.input_list.see(next_idx)
+            self.current_photo = self.input_paths[next_idx]
+            self._load_photo(self.current_photo)
+        else:
+            self.current_photo = None
+            self.photo_image = None
+            self.photo_label_var.set("No photo selected")
+            self.photo_dim_var.set("")
+            self.path_var.set("")
+            self.canvas.delete('all')
+            self.exif_tree.delete(*self.exif_tree.get_children())
+            for widget in self.custom_vars.values():
+                if isinstance(widget, tk.Text):
+                    widget.delete('1.0', tk.END)
+                else:
+                    widget.set('')
 
     def process_current(self):
         if not self.current_photo:
