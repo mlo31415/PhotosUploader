@@ -393,16 +393,16 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     def _on_drop(self, event):
         paths = parse_dnd_paths(event.data)
+        batch_state = {}
         added = 0
         for p in paths:
             p = p.strip()
             if os.path.isdir(p):
-                added += self._add_folder(p)
-            elif is_image(p) and p not in self.input_paths:
-                self.input_paths.append(p)
-                self.input_list.insert(tk.END, os.path.basename(p))
-                self.input_list.itemconfig(tk.END, {'foreground': '#000'})
-                added += 1
+                added += self._add_folder(p, batch_state)
+            elif is_image(p):
+                if self._add_single_image(p, batch_state):
+                    self.input_list.itemconfig(tk.END, {'foreground': '#000'})
+                    added += 1
         self._update_counts()
         self.set_status(f"Dropped {added} image(s) into input queue.")
 
@@ -415,11 +415,10 @@ class PhotosUploader:
             ("All files", "*.*"),
         ]
         paths = filedialog.askopenfilenames(title="Select Images", filetypes=filetypes)
+        batch_state = {}
         added = 0
         for p in paths:
-            if p not in self.input_paths:
-                self.input_paths.append(p)
-                self.input_list.insert(tk.END, os.path.basename(p))
+            if self._add_single_image(p, batch_state):
                 added += 1
         self._update_counts()
         self.set_status(f"Added {added} image(s) to input queue.")
@@ -431,17 +430,98 @@ class PhotosUploader:
             self._update_counts()
             self.set_status(f"Added {added} image(s) from folder.")
 
-    def _add_folder(self, folder: str) -> int:
+    def _add_folder(self, folder: str, batch_state: dict | None = None) -> int:
+        if batch_state is None:
+            batch_state = {}
         added = 0
         for root_dir, _, files in os.walk(folder):
             for f in sorted(files):
                 if Path(f).suffix.lower() in IMAGE_EXTENSIONS:
                     full = os.path.join(root_dir, f)
-                    if full not in self.input_paths:
-                        self.input_paths.append(full)
-                        self.input_list.insert(tk.END, f)
+                    if self._add_single_image(full, batch_state):
                         added += 1
         return added
+
+    def _find_name_conflict(self, path: str):
+        """Return the existing input path whose basename matches path, or None."""
+        name = os.path.basename(path)
+        for existing in self.input_paths:
+            if os.path.basename(existing) == name:
+                return existing
+        return None
+
+    def _show_conflict_dialog(self, new_path: str, existing_path: str,
+                              batch_state: dict) -> str:
+        """Ask the user how to resolve a filename conflict.
+
+        Returns 'skip' or 'replace'.  Sets batch_state['all'] to the chosen
+        base action when the user picks Skip All or Replace All.
+        """
+        if batch_state.get('all'):
+            return batch_state['all']
+
+        name = os.path.basename(new_path)
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Filename Conflict")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        self.root.update_idletasks()
+        rx = self.root.winfo_x() + self.root.winfo_width()  // 2
+        ry = self.root.winfo_y() + self.root.winfo_height() // 2
+        dlg.geometry(f"500x150+{rx - 250}+{ry - 75}")
+
+        msg = (f'A file named "{name}" is already in the input queue.\n\n'
+               f'Existing:  {existing_path}\n'
+               f'New:         {new_path}')
+        ttk.Label(dlg, text=msg, padding=(12, 10, 12, 6),
+                  wraplength=476, justify=tk.LEFT).pack()
+
+        result = tk.StringVar(value='skip')
+
+        btn_frame = ttk.Frame(dlg, padding=(12, 0, 12, 12))
+        btn_frame.pack()
+
+        def choose(action):
+            result.set(action)
+            if action in ('skip_all', 'replace_all'):
+                batch_state['all'] = action.replace('_all', '')
+            dlg.destroy()
+
+        ttk.Button(btn_frame, text="Skip",
+                   command=lambda: choose('skip')).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Skip All",
+                   command=lambda: choose('skip_all')).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Replace",
+                   command=lambda: choose('replace')).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Replace All",
+                   command=lambda: choose('replace_all')).pack(side=tk.LEFT, padx=4)
+
+        dlg.wait_window()
+        action = result.get()
+        return 'skip' if action in ('skip', 'skip_all') else 'replace'
+
+    def _add_single_image(self, path: str, batch_state: dict) -> bool:
+        """Add one image to the input queue, handling name conflicts.
+
+        Returns True if the image was added.
+        """
+        if path in self.input_paths:
+            return False  # exact duplicate — skip silently
+
+        existing = self._find_name_conflict(path)
+        if existing:
+            action = self._show_conflict_dialog(path, existing, batch_state)
+            if action == 'skip':
+                return False
+            # replace: remove the existing entry
+            idx = self.input_paths.index(existing)
+            self.input_paths.pop(idx)
+            self.input_list.delete(idx)
+
+        self.input_paths.append(path)
+        self.input_list.insert(tk.END, os.path.basename(path))
+        return True
 
     # -----------------------------------------------------------------------
     # Queue management
@@ -780,7 +860,7 @@ class PhotosUploader:
 
             # --- Write EXIF metadata ---
             if PIEXIF_AVAILABLE and action in ('copy', 'move'):
-                self._write_exif(dest_path)
+                self._write_exif(dest_path, path)
 
             # --- Move to output queue ---
             if path in self.input_paths:
@@ -799,14 +879,14 @@ class PhotosUploader:
             messagebox.showerror("Processing Error",
                                  f"Error processing {os.path.basename(path)}:\n{e}")
 
-    def _write_exif(self, path: str):
+    def _write_exif(self, path: str, source_path: str):
         """Attempt to write back edited EXIF fields via piexif."""
         if not PIEXIF_AVAILABLE:
             return
         try:
             exif_dict = piexif.load(path)
             # For now write Description if provided
-            custom = self.custom_data.get(path, {})
+            custom = self.custom_data.get(source_path, {})
             if custom.get('caption'):
                 caption_bytes = custom['caption'].encode('utf-8')
                 exif_dict['0th'][piexif.ImageIFD.ImageDescription] = caption_bytes
