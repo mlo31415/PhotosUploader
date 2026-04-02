@@ -313,10 +313,13 @@ class PhotosUploader:
         left_col.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
 
         nav = ttk.Frame(left_col)
-        nav.pack(fill=tk.X, pady=(0, 6))
+        nav.pack(fill=tk.X, pady=(0, 4))
         ttk.Button(nav, text="◀ Prev",   command=self.prev_photo).pack(side=tk.LEFT, padx=2)
         ttk.Button(nav, text="↺ Revert", command=self._revert_photo).pack(side=tk.LEFT, padx=2)
         ttk.Button(nav, text="Next ▶",   command=self.next_photo).pack(side=tk.LEFT, padx=2)
+
+        ttk.Button(left_col, text="☁ Queue for Upload",
+                   command=self._queue_for_upload).pack(fill=tk.X, pady=(0, 6))
 
         self.photo_label_var = tk.StringVar(value="No photo selected")
         ttk.Label(left_col, textvariable=self.photo_label_var,
@@ -818,6 +821,40 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Processing
     # -----------------------------------------------------------------------
+    def _queue_for_upload(self):
+        """Move the current photo to the output queue and clear the viewer."""
+        if not self.current_photo:
+            self.set_status("No photo selected.")
+            return
+        self._save_current_custom_fields()
+        path = self.current_photo
+
+        if path in self.input_paths:
+            idx = self.input_paths.index(path)
+            self.input_paths.pop(idx)
+            self.input_list.delete(idx)
+
+        if path not in self.output_paths:
+            self.output_paths.append(path)
+            self.output_list.insert(tk.END, os.path.basename(path))
+
+        # Clear the viewer
+        self.current_photo = None
+        self.photo_image = None
+        self.photo_label_var.set("No photo selected")
+        self.photo_dim_var.set("")
+        self.path_var.set("")
+        self.canvas.delete('all')
+        self.exif_tree.delete(*self.exif_tree.get_children())
+        for widget in self.custom_vars.values():
+            if isinstance(widget, tk.Text):
+                widget.delete('1.0', tk.END)
+            else:
+                widget.set('')
+
+        self._update_counts()
+        self.set_status(f"Queued for upload: {os.path.basename(path)}")
+
     def process_current(self):
         if not self.current_photo:
             self.set_status("No photo selected.")
