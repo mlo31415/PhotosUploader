@@ -251,11 +251,9 @@ class PhotosUploader:
                                                command=self._upload_queue,
                                                state=tk.DISABLED)
             self.upload_queue_btn.pack(side=tk.LEFT, padx=2)
-            ttk.Button(album_btn_row, text="Change Upload Album",
-                       command=self.open_output_folder).pack(side=tk.LEFT, padx=2)
 
             album_display_row = ttk.Frame(frame)
-            album_display_row.pack(fill=tk.X, pady=(0, 4))
+            album_display_row.pack(fill=tk.X, pady=(0, 2))
             ttk.Label(album_display_row, text="Album:").pack(side=tk.LEFT, padx=(2, 4))
 
             album_display_var = tk.StringVar(value="(none)")
@@ -287,6 +285,9 @@ class PhotosUploader:
 
             album_label.bind("<Configure>", _refresh_album_display)
             self.upload_album_var.trace_add("write", _refresh_album_display)
+
+            ttk.Button(frame, text="Change Upload Album",
+                       command=self.open_output_folder).pack(fill=tk.X, padx=2, pady=(0, 4))
 
         # Buttons
         btn_row = ttk.Frame(frame)
