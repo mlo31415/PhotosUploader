@@ -859,6 +859,17 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Processing
     # -----------------------------------------------------------------------
+    def _load_file_dict(self) -> dict:
+        """Load FileDict.json and return it, or an empty dict if unavailable."""
+        p = Path(DownloadAlbumStructure.FILE_INDEX_FILE)
+        if not p.exists():
+            return {}
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
     def _queue_for_upload(self):
         """Move the current photo to the output queue, then show the next one."""
         if not self.current_photo:
@@ -866,6 +877,36 @@ class PhotosUploader:
             return
         self._save_current_custom_fields()
         path = self.current_photo
+
+        filename = os.path.basename(path)
+
+        # Check against the upload queue — block if already queued but not yet uploaded
+        queued_match = next(
+            (p for p in self.output_paths if os.path.basename(p) == filename), None)
+        if queued_match:
+            messagebox.showwarning(
+                "File Already in Upload Queue",
+                f'"{filename}" is already in the upload queue (not yet uploaded):\n\n'
+                f"  {queued_match}\n\n"
+                "Upload blocked to prevent duplicate uploads.",
+                parent=self.root,
+            )
+            self.set_status(f"Blocked: {filename} already in upload queue.")
+            return
+
+        # Check against the Piwigo file dictionary — block duplicates already on server
+        file_dict = self._load_file_dict()
+        if filename in file_dict:
+            albums = file_dict[filename]
+            album_list = "\n  • ".join(albums)
+            messagebox.showwarning(
+                "File Already on Piwigo",
+                f'"{filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
+                "Upload blocked to prevent overwriting.",
+                parent=self.root,
+            )
+            self.set_status(f"Blocked: {filename} already exists on Piwigo.")
+            return
 
         # Capture position before removing so we can select the successor
         next_idx = None
