@@ -101,7 +101,7 @@ CUSTOM_FIELDS = [
     ('title', 'Title'),
     ('caption', 'Caption'),
     ('tags', 'Tags (comma-separated)'),
-    ('category', 'Category'),
+    ('photo_source', 'Photo Source'),
     ('notes', 'Notes'),
     ('output_filename', 'Output Filename'),
     ('output_folder', 'Target Album'),
@@ -390,6 +390,17 @@ class PhotosUploader:
                                command=lambda v=var: self._pick_folder(v)).grid(
                         row=i, column=2, padx=2)
         custom_frame.columnconfigure(1, weight=1)
+
+        def _on_photo_source_changed(*_):
+            if not hasattr(self, '_exif_data'):
+                return
+            if getattr(self, '_exif_has_artist', False):
+                return  # original EXIF already has Artist — don't overwrite
+            value = self.custom_vars['photo_source'].get().strip()
+            self._exif_data['Artist'] = value
+            self._refresh_exif_tree()
+
+        self.custom_vars['photo_source'].trace_add('write', _on_photo_source_changed)
 
         # ── EXIF / Metadata (right) ───────────────────────────────────────
         exif_frame = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
@@ -767,6 +778,7 @@ class PhotosUploader:
     def _load_exif(self, path: str):
         self.exif_tree.delete(*self.exif_tree.get_children())
         self._exif_data = {}
+        self._exif_has_artist = False
         if not PIL_AVAILABLE:
             return
         try:
@@ -782,6 +794,7 @@ class PhotosUploader:
                     display_tag = EXIF_TAG_NAMES.get(tag, tag)
                     self._exif_data[display_tag] = str(val)
                     self.exif_tree.insert('', tk.END, values=(display_tag, str(val)[:120]))
+                self._exif_has_artist = bool(self._exif_data.get('Artist'))
             else:
                 self.exif_tree.insert('', tk.END, values=('(No EXIF data)', ''))
         except Exception as e:
@@ -794,6 +807,18 @@ class PhotosUploader:
             if vals:
                 self.exif_edit_var.set(vals[1] if len(vals) > 1 else '')
 
+    def _refresh_exif_tree(self, reselect_key: str | None = None):
+        """Rebuild the EXIF treeview from self._exif_data in place."""
+        self.exif_tree.delete(*self.exif_tree.get_children())
+        reselect_iid = None
+        for key, val in self._exif_data.items():
+            iid = self.exif_tree.insert('', tk.END, values=(key, str(val)[:120]))
+            if key == reselect_key:
+                reselect_iid = iid
+        if reselect_iid:
+            self.exif_tree.selection_set(reselect_iid)
+            self.exif_tree.see(reselect_iid)
+
     def _apply_exif_edit(self):
         sel = self.exif_tree.selection()
         if not sel:
@@ -802,9 +827,9 @@ class PhotosUploader:
         item = sel[0]
         vals = self.exif_tree.item(item, 'values')
         new_val = self.exif_edit_var.get()
-        self.exif_tree.item(item, values=(vals[0], new_val))
         if vals:
             self._exif_data[vals[0]] = new_val
+        self._refresh_exif_tree(reselect_key=vals[0] if vals else "")
         self.set_status(f"EXIF field '{vals[0]}' updated (pending save).")
 
     # File info tab and separate file-info widget removed; path shown in `path_var`.
