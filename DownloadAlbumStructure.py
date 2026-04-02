@@ -115,6 +115,14 @@ class PiwigoClient:
         })
         return result.get("categories", [])
 
+    def create_album(self, name: str, parent_id: int = None) -> int:
+        """Create a new album and return its id."""
+        params = {"name": name}
+        if parent_id is not None:
+            params["parent"] = parent_id
+        result = self._call("pwg.categories.add", params)
+        return int(result.get("id", 0))
+
 
 # ---------------------------------------------------------------------------
 # Hierarchy builder
@@ -161,7 +169,27 @@ def _build_hierarchy(flat: list) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Shared fetch-and-save helper
+# ---------------------------------------------------------------------------
+def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
+    """Fetch albums from Piwigo, build the hierarchy, and write the JSON file.
+
+    step_cb(str) is called at each stage to report progress.  It must be
+    safe to call from a background thread (wrap with root.after if needed).
+    Returns the total number of albums fetched.
+    """
+    step_cb("Fetching album list…")
+    flat = client.get_albums()
+    step_cb("Building hierarchy…")
+    hierarchy = _build_hierarchy(flat)
+    step_cb(f"Writing {ALBUM_HIERARCHY_FILE.name}…")
+    with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
+        json.dump(hierarchy, f, indent=2, ensure_ascii=False)
+    return len(flat)
+
+
+# ---------------------------------------------------------------------------
+# Public entry points
 # ---------------------------------------------------------------------------
 def run(parent: tk.Widget, set_status_cb):
     """Download album hierarchy and write AlbumHierarchy.json.
@@ -232,17 +260,10 @@ def run(parent: tk.Widget, set_status_cb):
             parent.after(0, lambda: set_step("Logging in…"))
             client.login(params["username"], params["password"])
 
-            parent.after(0, lambda: set_step("Fetching album list…"))
-            flat = client.get_albums()
+            def step(msg):
+                parent.after(0, lambda m=msg: set_step(m))
 
-            parent.after(0, lambda: set_step("Building hierarchy…"))
-            hierarchy = _build_hierarchy(flat)
-
-            parent.after(0, lambda: set_step("Writing AlbumHierarchy.json…"))
-            with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
-                json.dump(hierarchy, f, indent=2, ensure_ascii=False)
-
-            n = len(flat)
+            n = _fetch_and_save_hierarchy(client, step)
             parent.after(0, lambda: finish_ok(n))
         except Exception as exc:
             err = str(exc)
@@ -251,3 +272,162 @@ def run(parent: tk.Widget, set_status_cb):
             client.logout()
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def add_album(parent: tk.Widget, set_status_cb):
+    """Open a dialog to create a new Piwigo album.
+
+    The user selects an optional parent from the existing album tree (leave
+    nothing selected to create a top-level album), enters a name, and clicks
+    Create.  The album is added via the API and AlbumHierarchy.json is
+    refreshed afterwards.
+    """
+    if not REQUESTS_AVAILABLE:
+        messagebox.showerror(
+            "Missing dependency",
+            "The 'requests' library is required.\nRun: pip install requests",
+            parent=parent,
+        )
+        return
+
+    try:
+        params = load_params()
+    except (FileNotFoundError, ValueError) as exc:
+        messagebox.showerror("Configuration error", str(exc), parent=parent)
+        return
+
+    # Load existing hierarchy for the parent picker (may be empty if not yet
+    # downloaded — user can still create a top-level album).
+    hierarchy = []
+    if ALBUM_HIERARCHY_FILE.exists():
+        try:
+            with open(ALBUM_HIERARCHY_FILE, encoding="utf-8") as f:
+                hierarchy = json.load(f)
+        except Exception:
+            pass
+
+    # ── Dialog ───────────────────────────────────────────────────────────────
+    dlg = tk.Toplevel(parent)
+    dlg.title("Add New Album")
+    dlg.resizable(False, False)
+    dlg.grab_set()
+
+    parent.update_idletasks()
+    rx = parent.winfo_x() + parent.winfo_width()  // 2
+    ry = parent.winfo_y() + parent.winfo_height() // 2
+    dlg.geometry(f"480x520+{rx - 240}+{ry - 260}")
+
+    ttk.Label(dlg,
+              text="Parent album  (leave unselected to create a top-level album):",
+              padding=(12, 10, 12, 4)).pack(anchor=tk.W)
+
+    # ── Album tree ───────────────────────────────────────────────────────────
+    tree_frame = ttk.Frame(dlg, padding=(12, 0, 12, 0))
+    tree_frame.pack(fill=tk.BOTH, expand=True)
+
+    yscroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+    xscroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+    tree = ttk.Treeview(tree_frame, selectmode="browse", show="tree",
+                        yscrollcommand=yscroll.set,
+                        xscrollcommand=xscroll.set)
+    yscroll.config(command=tree.yview)
+    xscroll.config(command=tree.xview)
+    yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+    xscroll.pack(side=tk.BOTTOM, fill=tk.X)
+    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    if not hierarchy:
+        tree.insert("", tk.END, text="(No album hierarchy loaded — "
+                    "use 'Download Album Hierarchy' first)", tags=("hint",))
+        tree.tag_configure("hint", foreground="gray")
+    else:
+        def _populate(parent_iid, nodes):
+            for node in nodes:
+                iid = str(node["id"])
+                tree.insert(parent_iid, tk.END, iid=iid,
+                            text=node["name"], open=False)
+                if node.get("children"):
+                    _populate(iid, node["children"])
+
+        _populate("", hierarchy)
+
+    # ── Name entry ───────────────────────────────────────────────────────────
+    name_frame = ttk.Frame(dlg, padding=(12, 8, 12, 0))
+    name_frame.pack(fill=tk.X)
+    ttk.Label(name_frame, text="New album name:").pack(side=tk.LEFT, padx=(0, 6))
+    name_var = tk.StringVar()
+    name_entry = ttk.Entry(name_frame, textvariable=name_var, width=32)
+    name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    name_entry.focus_set()
+
+    # ── Status / buttons ─────────────────────────────────────────────────────
+    status_var = tk.StringVar(value="")
+    ttk.Label(dlg, textvariable=status_var, foreground="gray",
+              padding=(12, 4, 12, 0)).pack(anchor=tk.W)
+
+    btn_frame = ttk.Frame(dlg, padding=(12, 6, 12, 12))
+    btn_frame.pack(fill=tk.X)
+
+    def on_create():
+        name = name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Name required",
+                                   "Please enter a name for the new album.",
+                                   parent=dlg)
+            name_entry.focus_set()
+            return
+
+        sel = tree.selection()
+        # Only use the selection if it has a numeric iid (i.e. a real album)
+        parent_id = None
+        if sel:
+            try:
+                parent_id = int(sel[0])
+            except ValueError:
+                parent_id = None
+
+        create_btn.config(state=tk.DISABLED)
+        cancel_btn.config(state=tk.DISABLED)
+        status_var.set("Creating album…")
+
+        def worker():
+            client = PiwigoClient(
+                params["url"],
+                params["username"],
+                params["password"],
+                verify_ssl=params.get("verify_ssl", True),
+            )
+            try:
+                client.login(params["username"], params["password"])
+                new_id = client.create_album(name, parent_id)
+                parent.after(0, lambda: status_var.set("Refreshing album hierarchy…"))
+                _fetch_and_save_hierarchy(client, lambda msg: None)
+                parent.after(0, lambda: finish_ok(name, new_id))
+            except Exception as exc:
+                err = str(exc)
+                parent.after(0, lambda: finish_err(err))
+            finally:
+                client.logout()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_ok(name, new_id):
+        dlg.destroy()
+        set_status_cb(
+            f"Album '{name}' created (id {new_id}). "
+            f"Hierarchy written to {ALBUM_HIERARCHY_FILE.name}."
+        )
+
+    def finish_err(err):
+        create_btn.config(state=tk.NORMAL)
+        cancel_btn.config(state=tk.NORMAL)
+        status_var.set("")
+        messagebox.showerror("Piwigo error", err, parent=dlg)
+        set_status_cb("Album creation failed.")
+
+    cancel_btn = ttk.Button(btn_frame, text="Cancel", command=dlg.destroy)
+    cancel_btn.pack(side=tk.RIGHT, padx=(4, 0))
+    create_btn = ttk.Button(btn_frame, text="Create", command=on_create)
+    create_btn.pack(side=tk.RIGHT)
+
+    dlg.bind("<Return>", lambda e: on_create())

@@ -937,8 +937,7 @@ class PhotosUploader:
             var.set(folder)
 
     def _add_new_album(self):
-        messagebox.showinfo("Add New Album", "Not yet implemented")
-        self.set_status("Add New Album: not yet implemented")
+        DownloadAlbumStructure.add_album(self.root, self.set_status)
 
     # -----------------------------------------------------------------------
     # Piwigo
