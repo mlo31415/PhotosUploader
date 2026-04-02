@@ -1023,6 +1023,11 @@ class PhotosUploader:
     # Piwigo
     # -----------------------------------------------------------------------
 
+    def _record_upload(self, path: str, album_fullname: str):
+        """Call after a file has been successfully uploaded to Piwigo."""
+        filename = os.path.basename(path)
+        DownloadAlbumStructure.record_uploaded_file(filename, album_fullname)
+
     def _upload_queue(self):
         if not self.output_paths:
             self.set_status("Upload queue is empty.")
@@ -1033,6 +1038,9 @@ class PhotosUploader:
                                    "Please select an upload album first.",
                                    parent=self.root)
             return
+        # TODO: implement actual upload loop here.
+        # After each successful upload, call:
+        #   self._record_upload(path, album)
         messagebox.showinfo("Upload Queue",
                             f"Upload of {len(self.output_paths)} photo(s) "
                             f"to '{album}' is not yet implemented.",

@@ -424,11 +424,24 @@ def add_album(parent: tk.Widget, set_status_cb):
     xscroll.pack(side=tk.BOTTOM, fill=tk.X)
     tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+    # fullname_by_id: id → fullname, built while populating the tree
+    fullname_by_id: dict[int, str] = {}
+    node_by_id: dict[int, dict] = {}
+
     if not hierarchy:
         tree.insert("", tk.END, text="(No album hierarchy loaded — "
                     "use 'Download Album Hierarchy' first)", tags=("hint",))
         tree.tag_configure("hint", foreground="gray")
     else:
+        def _index_nodes(nodes):
+            for node in nodes:
+                fullname_by_id[node["id"]] = node.get("fullname", node["name"])
+                node_by_id[node["id"]] = node
+                if node.get("children"):
+                    _index_nodes(node["children"])
+
+        _index_nodes(hierarchy)
+
         def _populate(parent_iid, nodes):
             for node in nodes:
                 iid = str(node["id"])
@@ -468,11 +481,15 @@ def add_album(parent: tk.Widget, set_status_cb):
         sel = tree.selection()
         # Only use the selection if it has a numeric iid (i.e. a real album)
         parent_id = None
+        parent_fullname = ""
         if sel:
             try:
                 parent_id = int(sel[0])
+                parent_fullname = fullname_by_id.get(parent_id, "")
             except ValueError:
                 parent_id = None
+
+        new_fullname = f"{parent_fullname} / {name}" if parent_fullname else name
 
         create_btn.config(state=tk.DISABLED)
         cancel_btn.config(state=tk.DISABLED)
@@ -488,8 +505,27 @@ def add_album(parent: tk.Widget, set_status_cb):
             try:
                 client.login(params["username"], params["password"])
                 new_id = client.create_album(name, parent_id)
-                parent.after(0, lambda: status_var.set("Refreshing album hierarchy…"))
-                _fetch_and_save_hierarchy(client, lambda msg: None)
+
+                # Insert new node into the local hierarchy and save
+                parent.after(0, lambda: status_var.set("Updating local hierarchy…"))
+                new_node = {
+                    "id":              new_id,
+                    "name":            name,
+                    "fullname":        new_fullname,
+                    "nb_images":       0,
+                    "total_nb_images": 0,
+                    "children":        [],
+                }
+                if parent_id is not None and parent_id in node_by_id:
+                    siblings = node_by_id[parent_id]["children"]
+                else:
+                    siblings = hierarchy
+                siblings.append(new_node)
+                siblings.sort(key=lambda n: n["name"].lower())
+
+                with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
+                    json.dump(hierarchy, f, indent=2, ensure_ascii=False)
+
                 parent.after(0, lambda: finish_ok(name, new_id))
             except Exception as exc:
                 err = str(exc)
@@ -502,8 +538,8 @@ def add_album(parent: tk.Widget, set_status_cb):
     def finish_ok(name, new_id):
         dlg.destroy()
         set_status_cb(
-            f"Album '{name}' created (id {new_id}). "
-            f"Hierarchy written to {ALBUM_HIERARCHY_FILE.name}."
+            f"Album '{new_fullname}' created (id {new_id}). "
+            f"{ALBUM_HIERARCHY_FILE.name} updated."
         )
 
     def finish_err(err):
@@ -836,3 +872,28 @@ def download_file_index(parent: tk.Widget, set_status_cb):
             client.logout()
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# File-index update after upload
+# ---------------------------------------------------------------------------
+def record_uploaded_file(filename: str, album_fullname: str):
+    """Add filename → album_fullname to FileDict.json after a successful upload.
+
+    Loads the existing index if present, appends the new entry (avoiding
+    duplicates), and writes the file back.  Safe to call from the main thread.
+    """
+    index: dict[str, list[str]] = {}
+    if FILE_INDEX_FILE.exists():
+        try:
+            with open(FILE_INDEX_FILE, encoding="utf-8") as f:
+                index = json.load(f)
+        except Exception:
+            pass
+
+    albums = index.setdefault(filename, [])
+    if album_fullname not in albums:
+        albums.append(album_fullname)
+
+    with open(FILE_INDEX_FILE, "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
