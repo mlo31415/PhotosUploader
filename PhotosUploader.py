@@ -172,10 +172,10 @@ class PhotosUploader:
         toolbar = ttk.Frame(self.root, padding=4)
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        ttk.Button(toolbar, text="➕ Add New Album", command=self._add_new_album).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Add New Album", command=self._add_new_album).pack(side=tk.LEFT, padx=2)
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        ttk.Button(toolbar, text="☁  Download Album Hierarchy", command=self._download_album_hierarchy).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="☁  Download File List", command=self._download_file_list).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Download Album Hierarchy", command=self._download_album_hierarchy).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Download File List", command=self._download_file_list).pack(side=tk.LEFT, padx=2)
 
         # ── Main three-panel area ─────────────────────────────────────────
         main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
