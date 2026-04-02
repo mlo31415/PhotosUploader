@@ -11,6 +11,7 @@ Public API
 """
 
 import json
+import time
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -431,3 +432,214 @@ def add_album(parent: tk.Widget, set_status_cb):
     create_btn.pack(side=tk.RIGHT)
 
     dlg.bind("<Return>", lambda e: on_create())
+
+
+# ---------------------------------------------------------------------------
+# Album picker
+# ---------------------------------------------------------------------------
+def _hierarchy_is_fresh() -> bool:
+    """Return True if AlbumHierarchy.json exists and is less than 24 hours old."""
+    if not ALBUM_HIERARCHY_FILE.exists():
+        return False
+    return (time.time() - ALBUM_HIERARCHY_FILE.stat().st_mtime) < 86400
+
+
+def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
+    """Show an album picker, auto-refreshing the hierarchy first if stale.
+
+    on_select_cb(album_id: int, fullname: str) is called when the user
+    confirms a selection.
+    """
+    if not REQUESTS_AVAILABLE:
+        messagebox.showerror(
+            "Missing dependency",
+            "The 'requests' library is required.\nRun: pip install requests",
+            parent=parent,
+        )
+        return
+
+    def open_picker():
+        try:
+            with open(ALBUM_HIERARCHY_FILE, encoding="utf-8") as f:
+                hierarchy = json.load(f)
+        except Exception as exc:
+            messagebox.showerror("Error",
+                                 f"Cannot read album hierarchy:\n{exc}",
+                                 parent=parent)
+            return
+        _show_picker_dialog(parent, hierarchy, on_select_cb)
+
+    if _hierarchy_is_fresh():
+        open_picker()
+        return
+
+    # Hierarchy is missing or stale — refresh silently first
+    try:
+        params = load_params()
+    except (FileNotFoundError, ValueError) as exc:
+        messagebox.showerror("Configuration error", str(exc), parent=parent)
+        return
+
+    dlg = tk.Toplevel(parent)
+    dlg.title("Refreshing Album Hierarchy")
+    dlg.resizable(False, False)
+    dlg.grab_set()
+
+    parent.update_idletasks()
+    rx = parent.winfo_x() + parent.winfo_width()  // 2
+    ry = parent.winfo_y() + parent.winfo_height() // 2
+    dlg.geometry(f"340x90+{rx - 170}+{ry - 45}")
+
+    ttk.Label(dlg, text="Refreshing album hierarchy from Piwigo…",
+              padding=(12, 10, 12, 4)).pack()
+    bar = ttk.Progressbar(dlg, mode="indeterminate", length=300)
+    bar.pack(padx=12, pady=(0, 12))
+    bar.start(12)
+
+    def on_done():
+        bar.stop()
+        dlg.destroy()
+        set_status_cb("Album hierarchy refreshed.")
+        open_picker()
+
+    def on_err(err):
+        bar.stop()
+        dlg.destroy()
+        if ALBUM_HIERARCHY_FILE.exists():
+            if messagebox.askyesno(
+                "Refresh failed",
+                f"Could not refresh album hierarchy:\n{err}\n\n"
+                "Use the existing (possibly stale) data instead?",
+                parent=parent,
+            ):
+                open_picker()
+        else:
+            messagebox.showerror("Refresh failed", err, parent=parent)
+
+    def worker():
+        client = PiwigoClient(
+            params["url"],
+            params["username"],
+            params["password"],
+            verify_ssl=params.get("verify_ssl", True),
+        )
+        try:
+            client.login(params["username"], params["password"])
+            _fetch_and_save_hierarchy(client, lambda msg: None)
+            parent.after(0, on_done)
+        except Exception as exc:
+            err = str(exc)
+            parent.after(0, lambda: on_err(err))
+        finally:
+            client.logout()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
+    """Render the album-tree picker dialog (RV Menu Tree style)."""
+    dlg = tk.Toplevel(parent)
+    dlg.title("Select Upload Album")
+    dlg.grab_set()
+
+    parent.update_idletasks()
+    rx = parent.winfo_x() + parent.winfo_width()  // 2
+    ry = parent.winfo_y() + parent.winfo_height() // 2
+    dlg.geometry(f"440x580+{rx - 220}+{ry - 290}")
+
+    # ── Filter bar ───────────────────────────────────────────────────────────
+    filter_frame = ttk.Frame(dlg, padding=(8, 8, 8, 4))
+    filter_frame.pack(fill=tk.X)
+    ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT, padx=(0, 6))
+    filter_var = tk.StringVar()
+    filter_entry = ttk.Entry(filter_frame, textvariable=filter_var)
+    filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    filter_entry.focus_set()
+
+    # ── Tree ─────────────────────────────────────────────────────────────────
+    tree_frame = ttk.Frame(dlg, padding=(8, 0, 8, 4))
+    tree_frame.pack(fill=tk.BOTH, expand=True)
+
+    yscroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+    xscroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+    tree = ttk.Treeview(tree_frame, selectmode="browse", show="tree",
+                        yscrollcommand=yscroll.set,
+                        xscrollcommand=xscroll.set)
+    yscroll.config(command=tree.yview)
+    xscroll.config(command=tree.xview)
+    yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+    xscroll.pack(side=tk.BOTTOM, fill=tk.X)
+    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    tree.column("#0", minwidth=200)
+
+    # Populate; top-level nodes open, children collapsed
+    all_items = []  # (iid, name_lower, fullname)
+
+    def _populate(parent_iid, nodes, top_level=False):
+        for node in nodes:
+            iid     = str(node["id"])
+            count   = node["total_nb_images"]
+            text    = f"{node['name']}  ({count:,})"
+            tree.insert(parent_iid, tk.END, iid=iid, text=text,
+                        open=top_level)
+            all_items.append((iid,
+                               node["name"].lower(),
+                               node.get("fullname", node["name"])))
+            if node.get("children"):
+                _populate(iid, node["children"])
+
+    _populate("", hierarchy, top_level=True)
+
+    # ── Filter: scroll to and select first match ──────────────────────────
+    def _on_filter(*_):
+        q = filter_var.get().strip().lower()
+        if not q:
+            tree.selection_remove(tree.selection())
+            return
+        for iid, name_lower, _ in all_items:
+            if q in name_lower:
+                tree.selection_set(iid)
+                tree.see(iid)
+                break
+
+    filter_var.trace_add("write", _on_filter)
+
+    # ── Selected-album label ─────────────────────────────────────────────────
+    sel_frame = ttk.Frame(dlg, padding=(8, 0, 8, 6))
+    sel_frame.pack(fill=tk.X)
+    ttk.Label(sel_frame, text="Selected:").pack(side=tk.LEFT, padx=(0, 4))
+    sel_var = tk.StringVar(value="(none)")
+    ttk.Label(sel_frame, textvariable=sel_var,
+              foreground="gray", anchor=tk.W).pack(side=tk.LEFT,
+                                                    fill=tk.X, expand=True)
+
+    # Build a fast iid→fullname lookup
+    fullname_by_iid = {iid: fn for iid, _, fn in all_items}
+
+    def _on_tree_select(_event):
+        sel = tree.selection()
+        sel_var.set(fullname_by_iid.get(sel[0], "(none)") if sel else "(none)")
+
+    tree.bind("<<TreeviewSelect>>", _on_tree_select)
+
+    # ── Buttons ──────────────────────────────────────────────────────────────
+    btn_frame = ttk.Frame(dlg, padding=(8, 0, 8, 10))
+    btn_frame.pack(fill=tk.X)
+
+    def on_select():
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning("No album selected",
+                                   "Please select an album first.",
+                                   parent=dlg)
+            return
+        album_id  = int(sel[0])
+        fullname  = fullname_by_iid.get(sel[0], "")
+        dlg.destroy()
+        on_select_cb(album_id, fullname)
+
+    ttk.Button(btn_frame, text="Cancel",
+               command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
+    ttk.Button(btn_frame, text="Select",
+               command=on_select).pack(side=tk.RIGHT)
+    dlg.bind("<Return>", lambda e: on_select())

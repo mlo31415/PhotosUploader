@@ -253,8 +253,36 @@ class PhotosUploader:
             album_display_row = ttk.Frame(frame)
             album_display_row.pack(fill=tk.X, pady=(0, 4))
             ttk.Label(album_display_row, text="Album:").pack(side=tk.LEFT, padx=(2, 4))
-            ttk.Label(album_display_row, textvariable=self.upload_album_var,
-                      foreground='gray', anchor=tk.W).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            album_display_var = tk.StringVar(value="(none)")
+            album_label = ttk.Label(album_display_row, textvariable=album_display_var,
+                                    foreground='gray', anchor=tk.W)
+            album_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            def _refresh_album_display(*_):
+                from tkinter.font import nametofont
+                full = self.upload_album_var.get()
+                try:
+                    font = nametofont("TkDefaultFont")
+                    avail = album_label.winfo_width() - 4
+                except Exception:
+                    album_display_var.set(full)
+                    return
+                if avail < 20 or not full or full == "(none)":
+                    album_display_var.set(full)
+                    return
+                if font.measure(full) <= avail:
+                    album_display_var.set(full)
+                    return
+                for i in range(len(full)):
+                    candidate = "\u2026" + full[i:]
+                    if font.measure(candidate) <= avail:
+                        album_display_var.set(candidate)
+                        return
+                album_display_var.set("\u2026")
+
+            album_label.bind("<Configure>", _refresh_album_display)
+            self.upload_album_var.trace_add("write", _refresh_album_display)
 
         # Buttons
         btn_row = ttk.Frame(frame)
@@ -612,10 +640,10 @@ class PhotosUploader:
         listbox.selection_set(j)
 
     def open_output_folder(self):
-        if self.output_paths:
-            folder = os.path.dirname(self.output_paths[-1])
-            if os.path.isdir(folder):
-                os.startfile(folder)
+        def on_select(_album_id, fullname):
+            self.upload_album_var.set(fullname)
+            self.set_status(f"Upload album set to: {fullname}")
+        DownloadAlbumStructure.pick_album(self.root, self.set_status, on_select)
 
     # -----------------------------------------------------------------------
     # Photo selection & display
