@@ -928,8 +928,11 @@ class PhotosUploader:
         # Check against the Piwigo file dictionary — block duplicates already on server
         file_dict = self._load_file_dict()
         if filename in file_dict:
-            albums = file_dict[filename]
-            album_list = "\n  • ".join(albums)
+            entries = file_dict[filename]
+            album_list = "\n  • ".join(
+                e.get("fullname", str(e)) if isinstance(e, dict) else str(e)
+                for e in entries
+            )
             messagebox.showwarning(
                 "File Already on Piwigo",
                 f'"{filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
@@ -1007,10 +1010,12 @@ class PhotosUploader:
     # Piwigo
     # -----------------------------------------------------------------------
 
-    def _record_upload(self, path: str, album_fullname: str):
+    def _record_upload(self, path: str, album_fullname: str,
+                       album_id: int = 0, file_id: int = 0):
         """Call after a file has been successfully uploaded to Piwigo."""
         filename = os.path.basename(path)
-        DownloadAlbumStructure.record_uploaded_file(filename, album_fullname)
+        DownloadAlbumStructure.record_uploaded_file(
+            filename, album_fullname, album_id=album_id, file_id=file_id)
 
     def _upload_queue(self):
         if not self.output_paths:

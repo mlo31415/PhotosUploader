@@ -244,13 +244,14 @@ def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
 # File-index builder
 # ---------------------------------------------------------------------------
 def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
-                               progress_cb) -> dict[str, list[str]]:
+                               progress_cb) -> dict[str, list[dict]]:
     """Walk every album, collect filenames, and write FileDict.json.
 
     progress_cb(done: int, total: int, album_name: str) is called after each
     album is processed.  It must be safe to call from a background thread.
 
-    Returns the completed index dict: {filename: [fullname, …], …}.
+    Returns the completed index dict:
+        {filename: [{"fullname": str, "album_id": int, "file_id": int}, …], …}
     The fullname used for each album is the breadcrumb stored in the flat
     album list (e.g. "Fan Photos / Ackermansion").
     """
@@ -261,7 +262,7 @@ def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
         fullname = cat.get("name", "")          # fullname=true → breadcrumb
         fullname_by_id[cat_id] = fullname
 
-    index: dict[str, list[str]] = {}
+    index: dict[str, list[dict]] = {}
     total = len(flat_albums)
 
     for done, cat in enumerate(flat_albums, 1):
@@ -276,10 +277,11 @@ def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
             filename = img.get("file", "").strip()
             if not filename:
                 continue
-            if filename not in index:
-                index[filename] = []
-            if fullname not in index[filename]:
-                index[filename].append(fullname)
+            file_id = int(img.get("id", 0))
+            entry = {"fullname": fullname, "album_id": cat_id, "file_id": file_id}
+            entries = index.setdefault(filename, [])
+            if not any(e["album_id"] == cat_id for e in entries):
+                entries.append(entry)
 
     with open(FILE_INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
@@ -561,7 +563,7 @@ def add_album(parent: tk.Widget, set_status_cb):
                 with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
                     json.dump(hierarchy, f, indent=2, ensure_ascii=False)
 
-                parent.after(0, lambda: finish_ok(name, new_id))
+                parent.after(0, lambda fn=new_fullname, nid=new_id: finish_ok(fn, nid))
             except Exception as exc:
                 err = str(exc)
                 parent.after(0, lambda: finish_err(err))
@@ -570,7 +572,7 @@ def add_album(parent: tk.Widget, set_status_cb):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def finish_ok(name, new_id):
+    def finish_ok(new_fullname, new_id):
         dlg.destroy()
         set_status_cb(
             f"Album '{new_fullname}' created (id {new_id}). "
@@ -737,7 +739,7 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
         for node in nodes:
             iid     = str(node["id"])
             count   = node["total_nb_images"]
-            text    = f"{node['name']}  ({count:,})"
+            text    = f"{node['name']}  (id {node['id']}, {count:,} photos)"
             tree.insert(parent_iid, tk.END, iid=iid, text=text,
                         open=top_level)
             all_items.append((iid,
@@ -912,13 +914,16 @@ def download_file_index(parent: tk.Widget, set_status_cb):
 # ---------------------------------------------------------------------------
 # File-index update after upload
 # ---------------------------------------------------------------------------
-def record_uploaded_file(filename: str, album_fullname: str):
-    """Add filename → album_fullname to FileDict.json after a successful upload.
+def record_uploaded_file(filename: str, album_fullname: str,
+                         album_id: int = 0, file_id: int = 0):
+    """Add filename → entry to FileDict.json after a successful upload.
 
+    Each entry is {"fullname": str, "album_id": int, "file_id": int}.
     Loads the existing index if present, appends the new entry (avoiding
-    duplicates), and writes the file back.  Safe to call from the main thread.
+    duplicates by album_id), and writes the file back.
+    Safe to call from the main thread.
     """
-    index: dict[str, list[str]] = {}
+    index: dict[str, list[dict]] = {}
     if FILE_INDEX_FILE.exists():
         try:
             with open(FILE_INDEX_FILE, encoding="utf-8") as f:
@@ -926,9 +931,11 @@ def record_uploaded_file(filename: str, album_fullname: str):
         except Exception:
             pass
 
-    albums = index.setdefault(filename, [])
-    if album_fullname not in albums:
-        albums.append(album_fullname)
+    entries = index.setdefault(filename, [])
+    if not any(e.get("album_id") == album_id for e in entries):
+        entries.append({"fullname": album_fullname,
+                        "album_id": album_id,
+                        "file_id":  file_id})
 
     with open(FILE_INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
