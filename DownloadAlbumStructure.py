@@ -186,13 +186,27 @@ def _build_hierarchy(flat: list) -> list:
         by_id[node_id] = node
 
     roots = []
+    orphans = []
     for cat in flat:
         node      = by_id[int(cat["id"])]
         parent_id = cat.get("id_uppercat")
-        if parent_id and str(parent_id) != "0" and int(parent_id) in by_id:
+        if not parent_id or str(parent_id) == "0":
+            roots.append(node)
+        elif int(parent_id) in by_id:
             by_id[int(parent_id)]["children"].append(node)
         else:
-            roots.append(node)
+            orphans.append(node)
+
+    if orphans:
+        orphan_container = {
+            "id":              -1,
+            "name":            "Orphans",
+            "fullname":        "Orphans",
+            "nb_images":       0,
+            "total_nb_images": 0,
+            "children":        orphans,
+        }
+        roots.append(orphan_container)
 
     def _sort(nodes):
         nodes.sort(key=lambda n: n["name"].lower())
