@@ -396,6 +396,19 @@ class PhotosUploader:
 
         self.custom_vars['photo_source'].trace_add('write', _on_photo_source_changed)
 
+        def _on_comments_changed(_event=None):
+            if not hasattr(self, '_exif_data'):
+                return
+            if getattr(self, '_exif_has_description', False):
+                return  # original EXIF already has Description — don't overwrite
+            widget = self.custom_vars['comments']
+            value = widget.get('1.0', tk.END).strip()
+            self._exif_data['Description'] = value
+            self._refresh_exif_tree()
+            widget.edit_modified(False)  # reset the modified flag so next change fires again
+
+        self.custom_vars['comments'].bind('<<Modified>>', _on_comments_changed)
+
         # ── EXIF / Metadata (right) ───────────────────────────────────────
         exif_frame = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
         hpane.add(exif_frame, weight=1)
@@ -788,10 +801,15 @@ class PhotosUploader:
                     display_tag = EXIF_TAG_NAMES.get(tag, tag)
                     self._exif_data[display_tag] = str(val)
                     self.exif_tree.insert('', tk.END, values=(display_tag, str(val)[:120]))
-                self._exif_has_artist = bool(self._exif_data.get('Artist'))
+                self._exif_has_artist      = bool(self._exif_data.get('Artist'))
+                self._exif_has_description = bool(self._exif_data.get('Description'))
             else:
+                self._exif_has_artist      = False
+                self._exif_has_description = False
                 self.exif_tree.insert('', tk.END, values=('(No EXIF data)', ''))
         except Exception as e:
+            self._exif_has_artist      = False
+            self._exif_has_description = False
             self.exif_tree.insert('', tk.END, values=('Error reading EXIF', str(e)))
 
     def _on_exif_select(self, event):
