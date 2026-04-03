@@ -16,7 +16,7 @@ Public API
 
     download_file_index(parent, set_status_cb)
         Optional: walk every album, build filename → [album fullname, …]
-        and write FileIndex.json.  Useful for detecting duplicates before
+        and write FileDict.json.  Useful for detecting duplicates before
         uploading.
 """
 
@@ -245,7 +245,7 @@ def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
 # ---------------------------------------------------------------------------
 def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
                                progress_cb) -> dict[str, list[str]]:
-    """Walk every album, collect filenames, and write FileIndex.json.
+    """Walk every album, collect filenames, and write FileDict.json.
 
     progress_cb(done: int, total: int, album_name: str) is called after each
     album is processed.  It must be safe to call from a background thread.
@@ -809,7 +809,7 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
 def download_file_index(parent: tk.Widget, set_status_cb):
     """Walk every album on the server and build a filename → album-path index.
 
-    The result is written to FileIndex.json as:
+    The result is written to FileDict.json as:
         { "photo.jpg": ["Album / SubAlbum", "Other Album"], … }
 
     A determinate progress dialog shows one row per album processed.
