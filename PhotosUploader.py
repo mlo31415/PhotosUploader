@@ -9,7 +9,6 @@ import re
 import sys
 import json
 import shutil
-import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
@@ -298,7 +297,7 @@ class PhotosUploader:
         if is_input:
             self.input_list = lb
             lb.bind('<<ListboxSelect>>', self._on_input_select)
-            lb.bind('<Double-Button-1>', lambda e: self.process_current())
+            lb.bind('<Double-Button-1>', lambda e: self._queue_for_upload())
             if DND_AVAILABLE:
                 lb.drop_target_register(DND_FILES)
                 lb.dnd_bind('<<Drop>>', self._on_drop)
@@ -963,49 +962,6 @@ class PhotosUploader:
                     widget.set('')
             self._update_button_states()
 
-    def process_current(self):
-        if not self.current_photo:
-            self.set_status("No photo selected.")
-            return
-        self._save_current_custom_fields()
-        self._process_photo(self.current_photo)
-
-    def process_all(self):
-        if not self.input_paths:
-            self.set_status("Input queue is empty.")
-            return
-        self._save_current_custom_fields()
-        total = len(self.input_paths)
-        self.progress['maximum'] = total
-        self.progress['value'] = 0
-
-        def worker():
-            paths = list(self.input_paths)  # snapshot
-            for i, p in enumerate(paths):
-                self.root.after(0, lambda p=p: self._process_photo(p))
-                self.root.after(0, lambda v=i+1: self.progress.configure(value=v))
-            self.root.after(0, lambda: self.set_status(f"Processed {total} photo(s)."))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _process_photo(self, path: str):
-        """Move a photo from the input queue to the output queue."""
-        try:
-            if path in self.input_paths:
-                idx = self.input_paths.index(path)
-                self.input_paths.pop(idx)
-                self.input_list.delete(idx)
-
-            if path not in self.output_paths:
-                self.output_paths.append(path)
-                self.output_list.insert(tk.END, os.path.basename(path))
-
-            self._update_counts()
-            self.set_status(f"Processed: {os.path.basename(path)}")
-
-        except Exception as e:
-            messagebox.showerror("Processing Error",
-                                 f"Error processing {os.path.basename(path)}:\n{e}")
 
     def _write_exif(self, path: str, source_path: str):
         """Attempt to write back edited EXIF fields via piexif."""
@@ -1146,7 +1102,7 @@ class PhotosUploader:
 
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
-        self.root.bind('<Control-Return>', lambda e: self.process_current())
+        self.root.bind('<Control-Return>', lambda e: self._queue_for_upload())
         self.root.bind('<Control-Right>', lambda e: self.next_photo())
         self.root.bind('<Control-Left>', lambda e: self.prev_photo())
 
