@@ -9,12 +9,13 @@ import re
 import json
 import shutil
 import tkinter as tk
+from datetime import datetime
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
 
 try:
-    from PIL import Image, ImageTk, ExifTags
+    from PIL import Image, ImageTk, ExifTags, IptcImagePlugin
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -70,7 +71,7 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff',
 
 EXIF_TAG_NAMES = {
     'DateTime': 'Date/Time',
-    'DateTimeOriginal': 'Date Taken',
+    'DateTimeOriginal': 'Date Created',
     'Make': 'Camera Make',
     'Model': 'Camera Model',
     'ImageWidth': 'Width',
@@ -93,6 +94,7 @@ CUSTOM_FIELDS = [
     ('output_filename', 'Output Filename'),
     ('caption', 'Caption'),
     ('photo_source', 'Photographer/Source'),
+    ('date_of_photo', 'Date of Photo'),
     ('comments', 'Comments'),
     ('tags', 'Tags (comma-separated)'),
 ]
@@ -143,6 +145,7 @@ class PhotosUploader:
         self.current_photo = None   # str path
         self.photo_image = None     # ImageTk reference
         self.custom_data = {}       # path -> dict of custom field values
+        self._field_links = []      # list of link descriptors; see _register_field_link
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.state_data = load_state()
@@ -376,27 +379,31 @@ class PhotosUploader:
                 self.custom_vars[key] = var
         custom_frame.columnconfigure(1, weight=1)
 
-        def _on_photo_source_changed(*_):
-            if not hasattr(self, '_exif_data'):
-                return
-            if getattr(self, '_exif_has_artist', False):
-                return  # original EXIF already has Artist — don't overwrite
-            value = self.custom_vars['photo_source'].get().strip()
-            self._exif_data['Artist'] = value
-            self._refresh_exif_tree()
+        # ── Bidirectional field links (custom field ↔ EXIF ↔ IPTC) ──────────
+        self._register_field_link(
+            custom_key  = 'photo_source',
+            exif_key    = 'Artist',
+            iptc_tag    = (2, 80),   # By-line
+            validate_fn = None,      # any string is valid
+        )
+        self._register_field_link(
+            custom_key  = 'date_of_photo',
+            exif_key    = 'Date Created',
+            iptc_tag    = (2, 55),   # Date Created
+            validate_fn = self._parse_date,
+        )
 
-        self.custom_vars['photo_source'].trace_add('write', _on_photo_source_changed)
-
+        # comments uses tk.Text (not StringVar) so it cannot use _register_field_link
         def _on_comments_changed(_event=None):
             if not hasattr(self, '_exif_data'):
                 return
             if getattr(self, '_exif_has_description', False):
-                return  # original EXIF already has Description — don't overwrite
+                return
             widget = self.custom_vars['comments']
             value = widget.get('1.0', tk.END).strip()
             self._exif_data['Description'] = value
             self._refresh_exif_tree()
-            widget.edit_modified(False)  # reset the modified flag so next change fires again
+            widget.edit_modified(False)
 
         self.custom_vars['comments'].bind('<<Modified>>', _on_comments_changed)
 
@@ -734,6 +741,7 @@ class PhotosUploader:
         self.photo_label_var.set(os.path.basename(path))
         self._display_photo(path)
         self._load_exif(path)
+        self._load_iptc(path)
         self._load_custom_fields(path)
         self.path_var.set(path)
         self._update_button_states()
@@ -767,10 +775,51 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # EXIF
     # -----------------------------------------------------------------------
+    def _register_field_link(self, custom_key: str, exif_key: str,
+                             iptc_tag: tuple, validate_fn=None):
+        """Register a bidirectional link between a custom StringVar field,
+        an EXIF display-name key, and an IPTC tag tuple (e.g. (2, 80)).
+
+        validate_fn(value: str) -> truthy  — called on non-empty values typed
+        into the custom field or the EXIF editor.  If it returns falsy the
+        update is silently skipped.  Pass None to accept any value.
+
+        Must be called after self.custom_vars has been built.
+        This method sets up the custom-field → EXIF trace and stores a
+        descriptor used by _load_iptc and _apply_exif_edit.
+        """
+        link = {
+            'custom_key':  custom_key,
+            'exif_key':    exif_key,
+            'iptc_tag':    iptc_tag,
+            'validate_fn': validate_fn,
+            'syncing':     False,
+        }
+        self._field_links.append(link)
+
+        def _on_custom_changed(*_):
+            if not hasattr(self, '_exif_data'):
+                return
+            if link['syncing']:
+                return
+            value = self.custom_vars[custom_key].get().strip()
+            # Empty value always clears the EXIF field; non-empty must pass validation
+            if value and validate_fn is not None and not validate_fn(value):
+                return
+            link['syncing'] = True
+            try:
+                self._exif_data[exif_key] = value
+                self._refresh_exif_tree()
+            finally:
+                link['syncing'] = False
+
+        self.custom_vars[custom_key].trace_add('write', _on_custom_changed)
+
     def _load_exif(self, path: str):
         self.exif_tree.delete(*self.exif_tree.get_children())
         self._exif_data = {}
-        self._exif_has_artist = False
+        self._exif_has_description  = False
+        self._exif_has_date_created = False
         if not PIL_AVAILABLE:
             return
         try:
@@ -786,16 +835,74 @@ class PhotosUploader:
                     display_tag = EXIF_TAG_NAMES.get(tag, tag)
                     self._exif_data[display_tag] = str(val)
                     self.exif_tree.insert('', tk.END, values=(display_tag, str(val)[:120]))
-                self._exif_has_artist      = bool(self._exif_data.get('Artist'))
-                self._exif_has_description = bool(self._exif_data.get('Description'))
+                self._exif_has_description  = bool(self._exif_data.get('Description'))
+                self._exif_has_date_created = bool(self._exif_data.get('Date Created'))
             else:
-                self._exif_has_artist      = False
-                self._exif_has_description = False
+                self._exif_has_description  = False
+                self._exif_has_date_created = False
                 self.exif_tree.insert('', tk.END, values=('(No EXIF data)', ''))
         except Exception as e:
-            self._exif_has_artist      = False
-            self._exif_has_description = False
+            self._exif_has_description  = False
+            self._exif_has_date_created = False
             self.exif_tree.insert('', tk.END, values=('Error reading EXIF', str(e)))
+
+    # Date formats accepted when the user types a date
+    _DATE_FORMATS = [
+        '%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%m-%d-%Y',
+        '%d/%m/%Y', '%d-%m-%Y', '%B %d, %Y', '%b %d, %Y',
+        '%Y:%m:%d %H:%M:%S',  # EXIF native full datetime
+        '%Y:%m:%d',           # EXIF date only
+    ]
+
+    def _parse_date(self, text: str) -> datetime | None:
+        """Return a datetime if *text* matches any known date format, else None."""
+        text = text.strip()
+        for fmt in self._DATE_FORMATS:
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _load_iptc(self, path: str):
+        """Read IPTC Date Created (2#055) and populate the date_of_photo field.
+
+        If the IPTC tag is missing but DateTimeOriginal is present in EXIF,
+        the EXIF value is used to fill in the IPTC date (in memory).
+        Ensures 'Date Created' appears in _exif_data so the tree always shows
+        the row and bidirectional sync works.
+        """
+        if not PIL_AVAILABLE:
+            return
+        iptc = {}
+        try:
+            img = Image.open(path)
+            iptc = IptcImagePlugin.getiptcinfo(img) or {}
+        except Exception:
+            pass
+
+        for link in self._field_links:
+            # Read IPTC tag
+            raw = iptc.get(link['iptc_tag'], b'')
+            if isinstance(raw, list):
+                raw = raw[0]
+            value = bytes(raw).decode('utf-8', errors='replace').strip() if raw else ''
+
+            # Fall back to EXIF if IPTC tag is absent
+            if not value:
+                value = self._exif_data.get(link['exif_key'], '')
+
+            # Populate the custom field under the reentrancy guard
+            link['syncing'] = True
+            try:
+                self.custom_vars[link['custom_key']].set(value)
+            finally:
+                link['syncing'] = False
+
+            # Keep _exif_data in sync so the tree always shows the row
+            self._exif_data[link['exif_key']] = value
+
+        self._refresh_exif_tree()
 
     def _on_exif_select(self, event):
         sel = self.exif_tree.selection()
@@ -826,6 +933,17 @@ class PhotosUploader:
         new_val = self.exif_edit_var.get()
         if vals:
             self._exif_data[vals[0]] = new_val
+            # Sync back to any linked custom field
+            for link in self._field_links:
+                if vals[0] == link['exif_key']:
+                    validate = link['validate_fn']
+                    if not new_val or validate is None or validate(new_val):
+                        link['syncing'] = True
+                        try:
+                            self.custom_vars[link['custom_key']].set(new_val)
+                        finally:
+                            link['syncing'] = False
+                    break
         self._refresh_exif_tree(reselect_key=vals[0] if vals else "")
         self.set_status(f"EXIF field '{vals[0]}' updated (pending save).")
 
