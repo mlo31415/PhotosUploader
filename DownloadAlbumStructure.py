@@ -23,6 +23,7 @@ Public API
 import json
 import time
 import threading
+import warnings
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -83,16 +84,18 @@ class PiwigoClient:
             url = "https://" + url
         self.base_url = url
         self.api_url  = f"{self.base_url}/ws.php?format=json"
-        self.session  = requests.Session()
+        self.session    = requests.Session()
         self.session.verify = verify_ssl
-        if not verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        self._verify_ssl = verify_ssl
 
     def _call(self, method: str, params: dict = None) -> dict:
         payload = {"method": method}
         if params:
             payload.update(params)
-        r = self.session.post(self.api_url, data=payload, timeout=30)
+        with warnings.catch_warnings():
+            if not self._verify_ssl:
+                warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+            r = self.session.post(self.api_url, data=payload, timeout=30)
         r.raise_for_status()
         try:
             data = r.json()
