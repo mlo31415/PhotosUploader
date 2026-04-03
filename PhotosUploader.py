@@ -98,12 +98,11 @@ EXIF_TAG_NAMES = {
 }
 
 CUSTOM_FIELDS = [
-    ('title', 'Title'),
-    ('caption', 'Caption'),
-    ('tags', 'Tags (comma-separated)'),
-    ('photo_source', 'Photographer/Source'),
-    ('notes', 'Notes'),
     ('output_filename', 'Output Filename'),
+    ('caption', 'Caption'),
+    ('photo_source', 'Photographer/Source'),
+    ('comments', 'Comments'),
+    ('tags', 'Tags (comma-separated)'),
 ]
 
 
@@ -374,7 +373,7 @@ class PhotosUploader:
         for i, (key, label) in enumerate(CUSTOM_FIELDS):
             ttk.Label(custom_frame, text=label + ":", width=22, anchor=tk.E).grid(
                 row=i, column=0, sticky=tk.E, pady=2, padx=(0, 4))
-            if key == 'notes':
+            if key == 'comments':
                 txt = tk.Text(custom_frame, height=3, width=40, wrap=tk.WORD,
                               font=('TkDefaultFont', 9))
                 txt.grid(row=i, column=1, sticky=tk.EW, pady=2)
