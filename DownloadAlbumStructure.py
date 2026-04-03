@@ -505,6 +505,24 @@ def add_album(parent: tk.Widget, set_status_cb):
 
         new_fullname = f"{parent_fullname} / {name}" if parent_fullname else name
 
+        # Check for a duplicate name among siblings
+        if parent_id is not None and parent_id in node_by_id:
+            siblings = node_by_id[parent_id]["children"]
+        else:
+            siblings = hierarchy
+        name_lower = name.lower()
+        duplicate = next((n for n in siblings if n["name"].lower() == name_lower), None)
+        if duplicate:
+            location = f'under "{parent_fullname}"' if parent_fullname else "at the top level"
+            messagebox.showwarning(
+                "Duplicate album name",
+                f'An album named "{duplicate["name"]}" already exists {location}.\n\n'
+                "Please choose a different name.",
+                parent=dlg,
+            )
+            name_entry.focus_set()
+            return
+
         create_btn.config(state=tk.DISABLED)
         cancel_btn.config(state=tk.DISABLED)
         status_var.set("Creating album…")
