@@ -874,6 +874,27 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Processing
     # -----------------------------------------------------------------------
+    # Characters forbidden in Windows filenames; also covers Linux/macOS
+    _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+    # Windows reserved names (case-insensitive, with or without extension)
+    _RESERVED_NAMES = re.compile(
+        r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$', re.IGNORECASE)
+
+    def _validate_output_filename(self, name: str) -> str | None:
+        """Return an error message if *name* is not a valid filename, else None."""
+        if not name:
+            return None  # empty means "use original filename" — always valid
+        if self._ILLEGAL_FILENAME_CHARS.search(name):
+            bad = ''.join(sorted(set(self._ILLEGAL_FILENAME_CHARS.findall(name))))
+            return (f'The output filename contains illegal character(s): {bad}\n\n'
+                    'A filename may not contain  \\ / : * ? " < > |')
+        if self._RESERVED_NAMES.match(name):
+            return (f'"{name}" is a reserved Windows filename and cannot be used.')
+        if name != name.strip() or name.endswith('.'):
+            return ('The output filename may not start or end with a space, '
+                    'or end with a period.')
+        return None
+
     def _load_file_dict(self) -> dict:
         """Load FileDict.json and return it, or an empty dict if unavailable."""
         p = Path(DownloadAlbumStructure.FILE_INDEX_FILE)
@@ -892,6 +913,14 @@ class PhotosUploader:
             return
         self._save_current_custom_fields()
         path = self.current_photo
+
+        # Validate output filename before queuing
+        out_name = self.custom_vars['output_filename'].get().strip()
+        err = self._validate_output_filename(out_name)
+        if err:
+            messagebox.showwarning("Invalid Output Filename", err, parent=self.root)
+            self.set_status("Queue blocked: invalid output filename.")
+            return
 
         filename = os.path.basename(path)
 
