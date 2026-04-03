@@ -1,7 +1,7 @@
 """
 PhotosUploader.py
 A GUI application for photo processing workflows.
-Requires: pip install Pillow tkinterdnd2 piexif
+Requires: pip install Pillow tkinterdnd2
 """
 
 import os
@@ -20,12 +20,6 @@ except ImportError:
     PIL_AVAILABLE = False
     print("WARNING: Pillow not installed. Run: pip install Pillow")
 
-try:
-    import piexif
-    PIEXIF_AVAILABLE = True
-except ImportError:
-    PIEXIF_AVAILABLE = False
-    print("WARNING: piexif not installed. Run: pip install piexif")
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -151,7 +145,6 @@ class PhotosUploader:
         self.custom_data = {}       # path -> dict of custom field values
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
-        self.thumb_cache = {}
         self.state_data = load_state()
         if self.state_data.get("upload_album"):
             self.upload_album_var.set(self.state_data["upload_album"])
@@ -474,12 +467,6 @@ class PhotosUploader:
         self._update_counts()
         self.set_status(f"Added {added} image(s) to input queue.")
 
-    def add_folder_dialog(self):
-        folder = filedialog.askdirectory(title="Select Folder")
-        if folder:
-            added = self._add_folder(folder)
-            self._update_counts()
-            self.set_status(f"Added {added} image(s) from folder.")
 
     def _add_folder(self, folder: str, batch_state: dict | None = None) -> int:
         if batch_state is None:
@@ -991,47 +978,6 @@ class PhotosUploader:
             self._update_button_states()
 
 
-    def _write_exif(self, path: str, source_path: str):
-        """Attempt to write back edited EXIF fields via piexif."""
-        if not PIEXIF_AVAILABLE:
-            return
-        try:
-            exif_dict = piexif.load(path)
-            # For now write Description if provided
-            custom = self.custom_data.get(source_path, {})
-            if custom.get('caption'):
-                caption_bytes = custom['caption'].encode('utf-8')
-                exif_dict['0th'][piexif.ImageIFD.ImageDescription] = caption_bytes
-            if custom.get('title'):
-                pass  # could map to XP fields
-            piexif.insert(piexif.dump(exif_dict), path)
-        except Exception:
-            pass  # Non-fatal — EXIF write failures are logged silently
-
-    # -----------------------------------------------------------------------
-    # Metadata save
-    # -----------------------------------------------------------------------
-    def save_metadata(self):
-        if not self.current_photo:
-            self.set_status("No photo selected.")
-            return
-        self._save_current_custom_fields()
-        self.set_status(f"Custom metadata saved for: {os.path.basename(self.current_photo)}")
-
-    def export_log(self):
-        """Export all custom data to a JSON file."""
-        if not self.custom_data:
-            self.set_status("No metadata to export.")
-            return
-        dest = filedialog.asksaveasfilename(
-            title="Export Metadata Log",
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
-        if dest:
-            with open(dest, 'w', encoding='utf-8') as f:
-                json.dump(self.custom_data, f, indent=2, ensure_ascii=False)
-            self.set_status(f"Exported metadata log to: {dest}")
-
     # -----------------------------------------------------------------------
     # Utilities
     # -----------------------------------------------------------------------
@@ -1053,10 +999,6 @@ class PhotosUploader:
         self.status_var.set(msg)
         self.root.update_idletasks()
 
-    def _pick_folder(self, var: tk.StringVar):
-        folder = filedialog.askdirectory()
-        if folder:
-            var.set(folder)
 
     def _add_new_album(self):
         DownloadAlbumStructure.add_album(self.root, self.set_status)
