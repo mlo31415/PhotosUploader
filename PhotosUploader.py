@@ -1258,7 +1258,7 @@ class PhotosUploader:
             messagebox.showerror("Upload Failed",
                                  f"Could not upload {output_filename}:\n\n{err}",
                                  parent=self.root)
-            self.set_status(f"Upload failed: {filename}")
+            self.set_status(f"Upload failed: {output_filename}")
 
         threading.Thread(target=worker, daemon=True).start()
 
