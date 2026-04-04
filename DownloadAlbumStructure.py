@@ -25,6 +25,7 @@ import json
 import time
 import threading
 import warnings
+import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
@@ -38,6 +39,11 @@ except ImportError:
         "ERROR: The 'requests' library is required but not installed.\n"
         "Run:  pip install requests"
     )
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # File paths
@@ -106,27 +112,56 @@ class PiwigoClient:
         self._verify_ssl = verify_ssl
 
     def _call(self, method: str, params: dict = None) -> dict:
-        payload = {"method": method}
-        if params:
-            payload.update(params)
-        with warnings.catch_warnings():
-            if not self._verify_ssl:
-                warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
-            r = self.session.post(self.api_url, data=payload, timeout=30)
-        r.raise_for_status()
-        try:
-            data = r.json()
-        except ValueError:
-            preview = r.text[:300].strip() if r.text else "(empty)"
-            raise RuntimeError(
-                f"Server did not return valid JSON for '{method}'.\n"
-                f"URL: {self.api_url}\n"
-                f"HTTP status: {r.status_code}\n"
-                f"Response: {preview}"
-            )
-        if data.get("stat") != "ok":
-            raise RuntimeError(data.get("message", "Unknown Piwigo API error"))
-        return data.get("result", {})
+        """Call Piwigo API with retry logic on timeout."""
+        max_retries = 3
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                payload = {"method": method}
+                if params:
+                    payload.update(params)
+                with warnings.catch_warnings():
+                    if not self._verify_ssl:
+                        warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+                    r = self.session.post(self.api_url, data=payload, timeout=30)
+                r.raise_for_status()
+                try:
+                    data = r.json()
+                except ValueError:
+                    preview = r.text[:300].strip() if r.text else "(empty)"
+                    raise RuntimeError(
+                        f"Server did not return valid JSON for '{method}'.\n"
+                        f"URL: {self.api_url}\n"
+                        f"HTTP status: {r.status_code}\n"
+                        f"Response: {preview}"
+                    )
+                if data.get("stat") != "ok":
+                    raise RuntimeError(data.get("message", "Unknown Piwigo API error"))
+                return data.get("result", {})
+            except (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout) as e:
+                retry_count += 1
+                last_error = e
+                if retry_count < max_retries:
+                    wait_time = 2 ** retry_count  # exponential backoff: 2s, 4s, 8s
+                    logger.debug(f"API timeout (attempt {retry_count}/{max_retries}). "
+                                f"Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(
+                        f"Connection to Piwigo server timed out after {max_retries} attempts.\n\n"
+                        f"Possible causes:\n"
+                        f"  • Piwigo server is slow or overloaded\n"
+                        f"  • Network connection is unstable\n"
+                        f"  • Server is temporarily unavailable\n\n"
+                        f"To fix:\n"
+                        f"  1. Check your internet connection\n"
+                        f"  2. Verify the Piwigo URL in PhotosUploader Params.json\n"
+                        f"  3. Try again in a few moments\n"
+                        f"  4. Contact your server administrator if the problem persists\n\n"
+                        f"Details: {str(last_error)}"
+                    )
 
     def login(self, username: str, password: str):
         self._call("pwg.session.login", {
@@ -179,31 +214,60 @@ class PiwigoClient:
             data['tags'] = tags
         if date_creation:
             data['date_creation'] = date_creation
-        with warnings.catch_warnings():
-            if not self._verify_ssl:
-                warnings.simplefilter('ignore', urllib3.exceptions.InsecureRequestWarning)
-            with open(path, 'rb') as fh:
-                r = self.session.post(
-                    self.api_url,
-                    data=data,
-                    files={'image': (filename, fh, 'image/jpeg')},
-                    timeout=120,
-                )
-        r.raise_for_status()
-        try:
-            resp = r.json()
-        except ValueError:
-            preview = r.text[:400].strip() if r.text else "(empty)"
-            raise RuntimeError(
-                f"Server did not return valid JSON for upload of {filename}.\n"
-                f"HTTP status: {r.status_code}\n"
-                f"Response preview:\n{preview}"
-            )
-        if resp.get('stat') != 'ok':
-            raise RuntimeError(resp.get('message', 'Unknown Piwigo upload error'))
-        result = resp.get('result', {})
-        print(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url','?')}")
-        return result
+
+        max_retries = 2
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                with warnings.catch_warnings():
+                    if not self._verify_ssl:
+                        warnings.simplefilter('ignore', urllib3.exceptions.InsecureRequestWarning)
+                    with open(path, 'rb') as fh:
+                        r = self.session.post(
+                            self.api_url,
+                            data=data,
+                            files={'image': (filename, fh, 'image/jpeg')},
+                            timeout=120,
+                        )
+                r.raise_for_status()
+                try:
+                    resp = r.json()
+                except ValueError:
+                    preview = r.text[:400].strip() if r.text else "(empty)"
+                    raise RuntimeError(
+                        f"Server did not return valid JSON for upload of {filename}.\n"
+                        f"HTTP status: {r.status_code}\n"
+                        f"Response preview:\n{preview}"
+                    )
+                if resp.get('stat') != 'ok':
+                    raise RuntimeError(resp.get('message', 'Unknown Piwigo upload error'))
+                result = resp.get('result', {})
+                print(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url','?')}")
+                return result
+            except (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout) as e:
+                retry_count += 1
+                last_error = e
+                if retry_count < max_retries:
+                    wait_time = 2 ** retry_count  # exponential backoff: 2s, 4s
+                    logger.debug(f"Upload timeout (attempt {retry_count}/{max_retries}). "
+                                f"Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(
+                        f"Upload of {filename} timed out after {max_retries} attempts (large file?).\n\n"
+                        f"Possible causes:\n"
+                        f"  • File is very large\n"
+                        f"  • Network connection is unstable\n"
+                        f"  • Piwigo server is overloaded\n\n"
+                        f"To fix:\n"
+                        f"  1. Try uploading a smaller image\n"
+                        f"  2. Check your internet connection\n"
+                        f"  3. Try again when the server is less busy\n"
+                        f"  4. Contact your server administrator if the problem persists\n\n"
+                        f"Details: {str(last_error)}"
+                    )
 
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
