@@ -149,7 +149,6 @@ class PhotosUploader:
 
         # State
         self.input_paths = []       # list of str
-        self.output_paths = []      # list of str
         self.current_photo = None   # str path
         self.photo_image = None     # ImageTk reference
         self._cached_image = None           # PIL Image (full-size, not thumbnailed)
@@ -197,11 +196,6 @@ class PhotosUploader:
         center_frame = self._build_center_panel(main_pane)
         main_pane.add(center_frame, weight=3)
 
-        # RIGHT: Output queue
-        right_frame = self._build_queue_panel(main_pane, "Upload Queue",
-                                              is_input=False)
-        main_pane.add(right_frame, weight=1)
-
         # ── Status bar ───────────────────────────────────────────────────
         status_bar = ttk.Frame(self.root, relief="sunken")
         status_bar.pack(side="bottom", fill="x")
@@ -211,79 +205,21 @@ class PhotosUploader:
     def _build_queue_panel(self, parent, title: str, is_input: bool) -> ttk.Frame:
         frame = ttk.LabelFrame(parent, text=title, padding=4)
 
-        if not is_input:
-            # Album selection sits at the very top of the upload panel
-            album_btn_row = ttk.Frame(frame)
-            album_btn_row.pack(fill="x", pady=(0, 2))
-            self.upload_top_btn = ttk.Button(album_btn_row, text="Upload Top Image",
-                                             command=self._upload_top_image,
-                                             state="disabled")
-            self.upload_top_btn.pack(side="left", padx=2)
-            self.upload_queue_btn = ttk.Button(album_btn_row, text="Upload Queue",
-                                               command=self._upload_queue,
-                                               state="disabled")
-            self.upload_queue_btn.pack(side="left", padx=2)
-
-            album_display_row = ttk.Frame(frame)
-            album_display_row.pack(fill="x", pady=(0, 2))
-            ttk.Label(album_display_row, text="Album:").pack(side="left", padx=(2, 4))
-
-            album_display_var = tk.StringVar(value="(none)")
-            album_label = ttk.Label(album_display_row, textvariable=album_display_var,
-                                    foreground='gray', anchor="w")
-            album_label.pack(side="left", fill="x", expand=True)
-
-            def _refresh_album_display(*_):
-                from tkinter.font import nametofont
-                full = self.upload_album_var.get()
-                try:
-                    font = nametofont("TkDefaultFont")
-                    avail = album_label.winfo_width() - 4
-                except Exception:
-                    album_display_var.set(full)
-                    return
-                if avail < 20 or not full or full == "(none)":
-                    album_display_var.set(full)
-                    return
-                if font.measure(full) <= avail:
-                    album_display_var.set(full)
-                    return
-                for i in range(len(full)):
-                    candidate = "\u2026" + full[i:]
-                    if font.measure(candidate) <= avail:
-                        album_display_var.set(candidate)
-                        return
-                album_display_var.set("\u2026")
-
-            album_label.bind("<Configure>", _refresh_album_display)
-            self.upload_album_var.trace_add("write", _refresh_album_display)
-
-            ttk.Button(frame, text="Change Upload Album",
-                       command=self.open_output_folder).pack(fill="x", padx=2, pady=(0, 4))
-
         # Buttons
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill="x", pady=(0, 4))
 
-        if is_input:
-            ttk.Button(btn_row, text="Add…", command=self.add_photos_dialog).pack(side="left", padx=2)
-            self.input_remove_btn = ttk.Button(btn_row, text="Remove",
-                                               command=self.remove_selected_input,
-                                               state="disabled")
-            self.input_remove_btn.pack(side="left", padx=2)
-            ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side="left")
-            ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side="left")
-        else:
-            ttk.Button(btn_row, text="Remove", command=self.remove_selected_output).pack(side="left", padx=2)
-            ttk.Button(btn_row, text="← Return", command=self.return_to_input).pack(side="left", padx=2)
+        ttk.Button(btn_row, text="Add…", command=self.add_photos_dialog).pack(side="left", padx=2)
+        self.input_remove_btn = ttk.Button(btn_row, text="Remove",
+                                           command=self.remove_selected_input,
+                                           state="disabled")
+        self.input_remove_btn.pack(side="left", padx=2)
+        ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side="left")
+        ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side="left")
 
         # Count label
-        if is_input:
-            self.input_count_var = tk.StringVar(value="0 items")
-            ttk.Label(btn_row, textvariable=self.input_count_var).pack(side="right", padx=4)
-        else:
-            self.output_count_var = tk.StringVar(value="0 items")
-            ttk.Label(btn_row, textvariable=self.output_count_var).pack(side="right", padx=4)
+        self.input_count_var = tk.StringVar(value="0 items")
+        ttk.Label(btn_row, textvariable=self.input_count_var).pack(side="right", padx=4)
 
         # Listbox with scrollbars
         list_frame = ttk.Frame(frame)
@@ -304,16 +240,11 @@ class PhotosUploader:
         xscroll.pack(side="bottom", fill="x")
         lb.pack(side="left", fill="both", expand=True)
 
-        if is_input:
-            self.input_list = lb
-            lb.bind('<<ListboxSelect>>', self._on_input_select)
-            lb.bind('<Double-Button-1>', lambda e: self._queue_for_upload())
-            if DND_AVAILABLE:
-                lb.drop_target_register(DND_FILES)
-                lb.dnd_bind('<<Drop>>', self._on_drop)
-        else:
-            self.output_list = lb
-            lb.bind('<<ListboxSelect>>', self._on_output_select)
+        self.input_list = lb
+        lb.bind('<<ListboxSelect>>', self._on_input_select)
+        if DND_AVAILABLE:
+            lb.drop_target_register(DND_FILES)
+            lb.dnd_bind('<<Drop>>', self._on_drop)
 
         return frame
 
@@ -328,25 +259,64 @@ class PhotosUploader:
         viewer_frame = ttk.LabelFrame(vpane, text="Photo Viewer", padding=4)
         vpane.add(viewer_frame, weight=1)
 
+        # ── Top bar: Album selection ───────────────────────────────────────
+        top_bar = ttk.Frame(viewer_frame)
+        top_bar.pack(fill="x", pady=(0, 4))
+
+        ttk.Label(top_bar, text="Upload to:").pack(side="left", padx=(2, 4))
+
+        album_display_var = tk.StringVar(value="(none)")
+        album_label = ttk.Label(top_bar, textvariable=album_display_var,
+                                foreground='gray', anchor="w", width=30)
+        album_label.pack(side="left", padx=2)
+
+        def _refresh_album_display(*_):
+            from tkinter.font import nametofont
+            full = self.upload_album_var.get()
+            try:
+                font = nametofont("TkDefaultFont")
+                avail = album_label.winfo_width() - 4
+            except Exception:
+                album_display_var.set(full)
+                return
+            if avail < 20 or not full or full == "(none)":
+                album_display_var.set(full)
+                return
+            if font.measure(full) <= avail:
+                album_display_var.set(full)
+                return
+            for i in range(len(full)):
+                candidate = "\u2026" + full[i:]
+                if font.measure(candidate) <= avail:
+                    album_display_var.set(candidate)
+                    return
+            album_display_var.set("\u2026")
+
+        album_label.bind("<Configure>", _refresh_album_display)
+        self.upload_album_var.trace_add("write", _refresh_album_display)
+
+        ttk.Button(top_bar, text="Change Upload Album",
+                   command=self.open_output_folder).pack(side="left", padx=2)
+
         # ── Left column: nav buttons, filename, dims, path ───────────────
         left_col = ttk.Frame(viewer_frame)
         left_col.pack(side="left", fill="y", padx=(0, 6))
 
+        self.upload_photo_btn = ttk.Button(left_col, text="⬆ Upload to Piwigo",
+                                           command=self._upload_current_photo,
+                                           state="disabled")
+        self.upload_photo_btn.pack(fill="x", pady=(0, 4))
+
         nav = ttk.Frame(left_col)
-        nav.pack(fill="x", pady=(0, 4))
-        self.prev_btn = ttk.Button(nav, text="◀ Prev", command=self.prev_photo,
+        nav.pack(fill="x", pady=(0, 6))
+        self.skip_btn = ttk.Button(nav, text="⊘ Skip",
+                                   command=self._skip_photo,
                                    state="disabled")
-        self.prev_btn.pack(side="left", padx=2)
+        self.skip_btn.pack(side="left", padx=2)
         self.revert_btn = ttk.Button(nav, text="↺ Revert",
                                      command=self._revert_photo,
                                      state="disabled")
         self.revert_btn.pack(side="left", padx=2)
-        self.next_btn = ttk.Button(nav, text="Next ▶", command=self.next_photo,
-                                   state="disabled")
-        self.next_btn.pack(side="left", padx=2)
-
-        ttk.Button(left_col, text="☁ Queue for Upload",
-                   command=self._queue_for_upload).pack(fill="x", pady=(0, 6))
 
         self.photo_label_var = tk.StringVar(value="No photo selected")
         ttk.Label(left_col, textvariable=self.photo_label_var,
@@ -601,23 +571,6 @@ class PhotosUploader:
             self.input_list.delete(i)
         self._update_counts()
 
-    def remove_selected_output(self):
-        sel = list(self.output_list.curselection())
-        for i in reversed(sel):
-            self.output_paths.pop(i)
-            self.output_list.delete(i)
-        self._update_counts()
-
-    def return_to_input(self):
-        sel = list(self.output_list.curselection())
-        for i in reversed(sel):
-            p = self.output_paths.pop(i)
-            self.output_list.delete(i)
-            if p not in self.input_paths:
-                self.input_paths.append(p)
-                self.input_list.insert("end", os.path.basename(p))
-        self._update_counts()
-
     def _move_item(self, listbox, direction):
         sel = listbox.curselection()
         if not sel:
@@ -655,42 +608,32 @@ class PhotosUploader:
         else:
             self._update_button_states()
 
-    def _on_output_select(self, event):
-        sel = self.output_list.curselection()
-        if sel:
+    def _skip_photo(self):
+        """Skip the current photo and load the next one from the input queue."""
+        if not self.current_photo or not self.input_paths:
+            return
+        try:
+            idx = self.input_paths.index(self.current_photo)
+        except ValueError:
+            return
+
+        # Remove the current photo from the input queue
+        self.input_paths.pop(idx)
+        self.input_list.delete(idx)
+        self._update_counts()
+
+        # Load the next photo if one exists
+        if self.input_paths:
+            next_idx = min(idx, len(self.input_paths) - 1)
+            self.input_list.selection_clear(0, "end")
+            self.input_list.selection_set(next_idx)
+            self.input_list.see(next_idx)
             self._save_current_custom_fields()
-            self.current_photo = self.output_paths[sel[0]]
+            self.current_photo = self.input_paths[next_idx]
             self._load_photo(self.current_photo)
-
-    def prev_photo(self):
-        if not self.current_photo or not self.input_paths:
-            return
-        try:
-            idx = self.input_paths.index(self.current_photo)
-            new_idx = max(0, idx - 1)
-        except ValueError:
-            new_idx = 0
-        self.input_list.selection_clear(0, "end")
-        self.input_list.selection_set(new_idx)
-        self.input_list.see(new_idx)
-        self._save_current_custom_fields()
-        self.current_photo = self.input_paths[new_idx]
-        self._load_photo(self.current_photo)
-
-    def next_photo(self):
-        if not self.current_photo or not self.input_paths:
-            return
-        try:
-            idx = self.input_paths.index(self.current_photo)
-            new_idx = min(len(self.input_paths) - 1, idx + 1)
-        except ValueError:
-            new_idx = 0
-        self.input_list.selection_clear(0, "end")
-        self.input_list.selection_set(new_idx)
-        self.input_list.see(new_idx)
-        self._save_current_custom_fields()
-        self.current_photo = self.input_paths[new_idx]
-        self._load_photo(self.current_photo)
+        else:
+            self._clear_viewer()
+            self.set_status("All photos have been skipped.")
 
     def _revert_photo(self):
         """Create a new, unchanged copy of the photo (prefer original from input queue).
@@ -1077,121 +1020,6 @@ class PhotosUploader:
         except Exception as e:
             self.set_status(f"Warning: could not write EXIF to {os.path.basename(path)}: {e}")
 
-    def _queue_for_upload(self):
-        """Move the current photo to the output queue, then show the next one."""
-        if not self.current_photo:
-            self.set_status("No photo selected.")
-            return
-        self._save_current_custom_fields()
-        path = self.current_photo
-
-        # Validate output filename before queuing
-        out_name = self.custom_vars['output_filename'].get().strip()
-        err = self._validate_output_filename(out_name)
-        if err:
-            messagebox.showwarning("Invalid Output Filename", err, parent=self.root)
-            self.set_status("Queue blocked: invalid output filename.")
-            return
-
-        # Write custom field values into the file's EXIF before queuing
-        self._write_exif_fields(path)
-
-        # Rename the file if an output filename was given and differs from current name
-        current_name = os.path.basename(path)
-        _, current_ext = os.path.splitext(current_name)
-        if out_name and out_name != current_name:
-            # Preserve the original extension if the user didn't supply one
-            _, out_ext = os.path.splitext(out_name)
-            new_name = out_name if out_ext else out_name + current_ext
-            new_path = os.path.join(os.path.dirname(path), new_name)
-            if os.path.exists(new_path) and new_path != path:
-                messagebox.showwarning(
-                    "Rename Failed",
-                    f'Cannot rename to "{new_name}": a file with that name already exists.',
-                    parent=self.root,
-                )
-                self.set_status("Queue blocked: rename target already exists.")
-                return
-            try:
-                os.rename(path, new_path)
-            except Exception as e:
-                messagebox.showwarning(
-                    "Rename Failed",
-                    f'Could not rename "{current_name}" to "{new_name}":\n{e}',
-                    parent=self.root,
-                )
-                self.set_status("Queue blocked: rename failed.")
-                return
-            # Update all references from old path to new path
-            if path in self.custom_data:
-                self.custom_data[new_path] = self.custom_data.pop(path)
-            if path in self.input_paths:
-                idx = self.input_paths.index(path)
-                self.input_paths[idx] = new_path
-                self.input_list.delete(idx)
-                self.input_list.insert(idx, new_name)
-            path = new_path
-            self.current_photo = new_path
-
-        filename = os.path.basename(path)
-
-        # Check against the upload queue — block if already queued but not yet uploaded
-        queued_match = next(
-            (p for p in self.output_paths if os.path.basename(p) == filename), None)
-        if queued_match:
-            messagebox.showwarning(
-                "File Already in Upload Queue",
-                f'"{filename}" is already in the upload queue (not yet uploaded):\n\n'
-                f"  {queued_match}\n\n"
-                "Upload blocked to prevent duplicate uploads.",
-                parent=self.root,
-            )
-            self.set_status(f"Blocked: {filename} already in upload queue.")
-            return
-
-        # Check against the Piwigo file dictionary — block duplicates already on server
-        file_dict = self._load_file_dict()
-        if filename in file_dict:
-            entries = file_dict[filename]
-            album_list = "\n  • ".join(
-                e.get("fullname", str(e)) if isinstance(e, dict) else str(e)
-                for e in entries
-            )
-            messagebox.showwarning(
-                "File Already on Piwigo",
-                f'"{filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
-                "Upload blocked to prevent overwriting.",
-                parent=self.root,
-            )
-            self.set_status(f"Blocked: {filename} already exists on Piwigo.")
-            return
-
-        # Capture position before removing so we can select the successor
-        next_idx = None
-        if path in self.input_paths:
-            idx = self.input_paths.index(path)
-            self.input_paths.pop(idx)
-            self.input_list.delete(idx)
-            if self.input_paths:
-                next_idx = min(idx, len(self.input_paths) - 1)
-
-        if path not in self.output_paths:
-            self.output_paths.append(path)
-            self.output_list.insert("end", os.path.basename(path))
-
-        self._update_counts()
-        self.set_status(f"Queued for upload: {os.path.basename(path)}")
-
-        # Always clear the viewer first, then load the next photo if there is one
-        self._clear_viewer()
-        if next_idx is not None:
-            self.input_list.selection_clear(0, "end")
-            self.input_list.selection_set(next_idx)
-            self.input_list.see(next_idx)
-            self.current_photo = self.input_paths[next_idx]
-            self._load_photo(self.current_photo)
-
-
     def _clear_viewer(self):
         """Reset the photo viewer, EXIF tree, and all custom fields to empty."""
         self.current_photo = None
@@ -1215,26 +1043,16 @@ class PhotosUploader:
     # Utilities
     # -----------------------------------------------------------------------
     def _update_button_states(self):
-        has_output = bool(self.output_paths)
-        self.upload_top_btn.config(state="normal" if has_output else "disabled")
-        self.upload_queue_btn.config(state="normal" if has_output else "disabled")
+        self.skip_btn.config(state="normal" if self.current_photo and self.input_paths else "disabled")
+        self.upload_photo_btn.config(state="normal" if self.current_photo else "disabled")
         self.revert_btn.config(
             state="normal" if self.current_photo else "disabled")
         has_input_sel = bool(self.input_list.curselection())
         self.input_remove_btn.config(
             state="normal" if has_input_sel else "disabled")
-        # Prev/Next: enabled only when there is a predecessor/successor in the input queue
-        try:
-            idx = self.input_paths.index(self.current_photo) if self.current_photo else -1
-        except ValueError:
-            idx = -1
-        self.prev_btn.config(state="normal" if idx > 0 else "disabled")
-        self.next_btn.config(state="normal" if 0 <= idx < len(self.input_paths) - 1
-                             else "disabled")
 
     def _update_counts(self):
         self.input_count_var.set(f"{len(self.input_paths)} item(s)")
-        self.output_count_var.set(f"{len(self.output_paths)} item(s)")
         self._update_button_states()
 
     def set_status(self, msg: str):
@@ -1256,10 +1074,10 @@ class PhotosUploader:
         DownloadAlbumStructure.record_uploaded_file(
             filename, album_fullname, album_id=album_id, file_id=file_id)
 
-    def _upload_top_image(self):
-        """Upload the first item in the upload queue to the selected Piwigo album."""
-        if not self.output_paths:
-            self.set_status("Upload queue is empty.")
+    def _upload_current_photo(self):
+        """Upload the currently displayed photo to the selected Piwigo album."""
+        if not self.current_photo:
+            self.set_status("No photo selected.")
             return
 
         album    = self.upload_album_var.get()
@@ -1273,7 +1091,7 @@ class PhotosUploader:
             )
             return
 
-        path = self.output_paths[0]
+        path = self.current_photo
 
         try:
             params = DownloadAlbumStructure.load_params()
@@ -1281,15 +1099,32 @@ class PhotosUploader:
             messagebox.showerror("Configuration error", str(exc), parent=self.root)
             return
 
-        # Gather custom field values for this file
-        custom   = self.custom_data.get(path, {})
-        filename = os.path.basename(path)
-        name     = custom.get('output_filename', '').strip() or os.path.splitext(filename)[0]
-        author   = custom.get('photo_source', '').strip()
-        comment  = custom.get('comments', '').strip()
-        tags     = custom.get('tags', '').strip()
+        # Gather custom field values for this file (read from widgets, not saved data)
+        original_filename = os.path.basename(path)
+        output_filename = self.custom_vars['output_filename'].get().strip() or original_filename
+        author   = self.custom_vars['photo_source'].get().strip()
+        comment  = self.custom_vars['comments'].get('1.0', "end").strip()
+        tags     = self.custom_vars['tags'].get().strip()
+        name     = output_filename.split('.')[0] if '.' in output_filename else output_filename
 
-        self.set_status(f"Uploading {filename}…")
+        # Check against the Piwigo file dictionary — block duplicates already on server
+        file_dict = self._load_file_dict()
+        if output_filename in file_dict:
+            entries = file_dict[output_filename]
+            album_list = "\n  • ".join(
+                e.get("fullname", str(e)) if isinstance(e, dict) else str(e)
+                for e in entries
+            )
+            messagebox.showwarning(
+                "File Already on Piwigo",
+                f'"{output_filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
+                "Upload blocked to prevent overwriting.",
+                parent=self.root,
+            )
+            self.set_status(f"Blocked: {output_filename} already exists on Piwigo.")
+            return
+
+        self.set_status(f"Uploading {output_filename}…")
         self.root.update_idletasks()
 
         def worker():
@@ -1313,39 +1148,17 @@ class PhotosUploader:
                 client.logout()
 
         def finish_ok(image_id):
-            # Remove from queue
-            self.output_paths.pop(0)
-            self.output_list.delete(0)
-            self._update_counts()
             self._record_upload(path, album, album_id=album_id, file_id=image_id)
             self.set_status(
-                f"Uploaded {filename} → '{album}' (image id {image_id}).")
+                f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
 
         def finish_err(err):
             messagebox.showerror("Upload Failed",
-                                 f"Could not upload {filename}:\n\n{err}",
+                                 f"Could not upload {output_filename}:\n\n{err}",
                                  parent=self.root)
             self.set_status(f"Upload failed: {filename}")
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _upload_queue(self):
-        if not self.output_paths:
-            self.set_status("Upload queue is empty.")
-            return
-        album = self.upload_album_var.get()
-        if not album or album == "(none)":
-            messagebox.showwarning("No album selected",
-                                   "Please select an upload album first.",
-                                   parent=self.root)
-            return
-        # TODO: implement actual upload loop here.
-        # After each successful upload, call:
-        #   self._record_upload(path, album)
-        messagebox.showinfo("Upload Queue",
-                            f"Upload of {len(self.output_paths)} photo(s) "
-                            f"to '{album}' is not yet implemented.",
-                            parent=self.root)
 
     def _download_album_hierarchy(self):
         DownloadAlbumStructure.run(self.root, self.set_status)
@@ -1390,9 +1203,6 @@ class PhotosUploader:
 
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
-        self.root.bind('<Control-Return>', lambda e: self._queue_for_upload())
-        self.root.bind('<Control-Right>', lambda e: self.next_photo())
-        self.root.bind('<Control-Left>', lambda e: self.prev_photo())
 
 
 # ---------------------------------------------------------------------------
