@@ -177,16 +177,16 @@ class PhotosUploader:
     def _build_ui(self):
         # ── Top toolbar ──────────────────────────────────────────────────
         toolbar = ttk.Frame(self.root, padding=4)
-        toolbar.pack(side=tk.TOP, fill=tk.X)
+        toolbar.pack(side="top", fill="x")
 
-        ttk.Button(toolbar, text="Add New Album", command=self._add_new_album).pack(side=tk.LEFT, padx=2)
-        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        ttk.Button(toolbar, text="Download Album Hierarchy", command=self._download_album_hierarchy).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Download File List", command=self._download_file_list).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Add New Album", command=self._add_new_album).pack(side="left", padx=2)
+        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6)
+        ttk.Button(toolbar, text="Download Album Hierarchy", command=self._download_album_hierarchy).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Download File List", command=self._download_file_list).pack(side="left", padx=2)
 
         # ── Main three-panel area ─────────────────────────────────────────
-        main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_pane.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        main_pane = ttk.PanedWindow(self.root, orient="horizontal")
+        main_pane.pack(side="top", fill="both", expand=True, padx=4, pady=4)
 
         # LEFT: Input queue
         left_frame = self._build_queue_panel(main_pane, "Input Queue",
@@ -203,10 +203,10 @@ class PhotosUploader:
         main_pane.add(right_frame, weight=1)
 
         # ── Status bar ───────────────────────────────────────────────────
-        status_bar = ttk.Frame(self.root, relief=tk.SUNKEN)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        ttk.Label(status_bar, textvariable=self.status_var, anchor=tk.W).pack(
-            side=tk.LEFT, padx=6, pady=2)
+        status_bar = ttk.Frame(self.root, relief="sunken")
+        status_bar.pack(side="bottom", fill="x")
+        ttk.Label(status_bar, textvariable=self.status_var, anchor="w").pack(
+            side="left", padx=6, pady=2)
 
     def _build_queue_panel(self, parent, title: str, is_input: bool) -> ttk.Frame:
         frame = ttk.LabelFrame(parent, text=title, padding=4)
@@ -214,24 +214,24 @@ class PhotosUploader:
         if not is_input:
             # Album selection sits at the very top of the upload panel
             album_btn_row = ttk.Frame(frame)
-            album_btn_row.pack(fill=tk.X, pady=(0, 2))
+            album_btn_row.pack(fill="x", pady=(0, 2))
             self.upload_top_btn = ttk.Button(album_btn_row, text="Upload Top Image",
                                              command=self._upload_top_image,
-                                             state=tk.DISABLED)
-            self.upload_top_btn.pack(side=tk.LEFT, padx=2)
+                                             state="disabled")
+            self.upload_top_btn.pack(side="left", padx=2)
             self.upload_queue_btn = ttk.Button(album_btn_row, text="Upload Queue",
                                                command=self._upload_queue,
-                                               state=tk.DISABLED)
-            self.upload_queue_btn.pack(side=tk.LEFT, padx=2)
+                                               state="disabled")
+            self.upload_queue_btn.pack(side="left", padx=2)
 
             album_display_row = ttk.Frame(frame)
-            album_display_row.pack(fill=tk.X, pady=(0, 2))
-            ttk.Label(album_display_row, text="Album:").pack(side=tk.LEFT, padx=(2, 4))
+            album_display_row.pack(fill="x", pady=(0, 2))
+            ttk.Label(album_display_row, text="Album:").pack(side="left", padx=(2, 4))
 
             album_display_var = tk.StringVar(value="(none)")
             album_label = ttk.Label(album_display_row, textvariable=album_display_var,
-                                    foreground='gray', anchor=tk.W)
-            album_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                                    foreground='gray', anchor="w")
+            album_label.pack(side="left", fill="x", expand=True)
 
             def _refresh_album_display(*_):
                 from tkinter.font import nametofont
@@ -259,40 +259,40 @@ class PhotosUploader:
             self.upload_album_var.trace_add("write", _refresh_album_display)
 
             ttk.Button(frame, text="Change Upload Album",
-                       command=self.open_output_folder).pack(fill=tk.X, padx=2, pady=(0, 4))
+                       command=self.open_output_folder).pack(fill="x", padx=2, pady=(0, 4))
 
         # Buttons
         btn_row = ttk.Frame(frame)
-        btn_row.pack(fill=tk.X, pady=(0, 4))
+        btn_row.pack(fill="x", pady=(0, 4))
 
         if is_input:
-            ttk.Button(btn_row, text="Add…", command=self.add_photos_dialog).pack(side=tk.LEFT, padx=2)
+            ttk.Button(btn_row, text="Add…", command=self.add_photos_dialog).pack(side="left", padx=2)
             self.input_remove_btn = ttk.Button(btn_row, text="Remove",
                                                command=self.remove_selected_input,
-                                               state=tk.DISABLED)
-            self.input_remove_btn.pack(side=tk.LEFT, padx=2)
-            ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side=tk.LEFT)
-            ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side=tk.LEFT)
+                                               state="disabled")
+            self.input_remove_btn.pack(side="left", padx=2)
+            ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side="left")
+            ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side="left")
         else:
-            ttk.Button(btn_row, text="Remove", command=self.remove_selected_output).pack(side=tk.LEFT, padx=2)
-            ttk.Button(btn_row, text="← Return", command=self.return_to_input).pack(side=tk.LEFT, padx=2)
+            ttk.Button(btn_row, text="Remove", command=self.remove_selected_output).pack(side="left", padx=2)
+            ttk.Button(btn_row, text="← Return", command=self.return_to_input).pack(side="left", padx=2)
 
         # Count label
         if is_input:
             self.input_count_var = tk.StringVar(value="0 items")
-            ttk.Label(btn_row, textvariable=self.input_count_var).pack(side=tk.RIGHT, padx=4)
+            ttk.Label(btn_row, textvariable=self.input_count_var).pack(side="right", padx=4)
         else:
             self.output_count_var = tk.StringVar(value="0 items")
-            ttk.Label(btn_row, textvariable=self.output_count_var).pack(side=tk.RIGHT, padx=4)
+            ttk.Label(btn_row, textvariable=self.output_count_var).pack(side="right", padx=4)
 
         # Listbox with scrollbars
         list_frame = ttk.Frame(frame)
-        list_frame.pack(fill=tk.BOTH, expand=True)
+        list_frame.pack(fill="both", expand=True)
 
-        yscroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
-        xscroll = ttk.Scrollbar(list_frame, orient=tk.HORIZONTAL)
+        yscroll = ttk.Scrollbar(list_frame, orient="vertical")
+        xscroll = ttk.Scrollbar(list_frame, orient="horizontal")
 
-        lb = tk.Listbox(list_frame, selectmode=tk.EXTENDED,
+        lb = tk.Listbox(list_frame, selectmode="extended",
                         yscrollcommand=yscroll.set,
                         xscrollcommand=xscroll.set,
                         activestyle='dotbox',
@@ -300,9 +300,9 @@ class PhotosUploader:
         yscroll.config(command=lb.yview)
         xscroll.config(command=lb.xview)
 
-        yscroll.pack(side=tk.RIGHT, fill=tk.Y)
-        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
-        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        yscroll.pack(side="right", fill="y")
+        xscroll.pack(side="bottom", fill="x")
+        lb.pack(side="left", fill="both", expand=True)
 
         if is_input:
             self.input_list = lb
@@ -321,8 +321,8 @@ class PhotosUploader:
         frame = ttk.Frame(parent)
 
         # Vertical paned window: viewer (top, smaller) / fields row (bottom)
-        vpane = ttk.PanedWindow(frame, orient=tk.VERTICAL)
-        vpane.pack(fill=tk.BOTH, expand=True)
+        vpane = ttk.PanedWindow(frame, orient="vertical")
+        vpane.pack(fill="both", expand=True)
 
         # ── Photo display (top pane) ──────────────────────────────────────
         viewer_frame = ttk.LabelFrame(vpane, text="Photo Viewer", padding=4)
@@ -330,39 +330,39 @@ class PhotosUploader:
 
         # ── Left column: nav buttons, filename, dims, path ───────────────
         left_col = ttk.Frame(viewer_frame)
-        left_col.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
+        left_col.pack(side="left", fill="y", padx=(0, 6))
 
         nav = ttk.Frame(left_col)
-        nav.pack(fill=tk.X, pady=(0, 4))
+        nav.pack(fill="x", pady=(0, 4))
         self.prev_btn = ttk.Button(nav, text="◀ Prev", command=self.prev_photo,
-                                   state=tk.DISABLED)
-        self.prev_btn.pack(side=tk.LEFT, padx=2)
+                                   state="disabled")
+        self.prev_btn.pack(side="left", padx=2)
         self.revert_btn = ttk.Button(nav, text="↺ Revert",
                                      command=self._revert_photo,
-                                     state=tk.DISABLED)
-        self.revert_btn.pack(side=tk.LEFT, padx=2)
+                                     state="disabled")
+        self.revert_btn.pack(side="left", padx=2)
         self.next_btn = ttk.Button(nav, text="Next ▶", command=self.next_photo,
-                                   state=tk.DISABLED)
-        self.next_btn.pack(side=tk.LEFT, padx=2)
+                                   state="disabled")
+        self.next_btn.pack(side="left", padx=2)
 
         ttk.Button(left_col, text="☁ Queue for Upload",
-                   command=self._queue_for_upload).pack(fill=tk.X, pady=(0, 6))
+                   command=self._queue_for_upload).pack(fill="x", pady=(0, 6))
 
         self.photo_label_var = tk.StringVar(value="No photo selected")
         ttk.Label(left_col, textvariable=self.photo_label_var,
                   font=('TkDefaultFont', 9, 'italic'),
-                  anchor=tk.W).pack(fill=tk.X, pady=(0, 2))
+                  anchor="w").pack(fill="x", pady=(0, 2))
 
         self.photo_dim_var = tk.StringVar(value="")
         ttk.Label(left_col, textvariable=self.photo_dim_var,
-                  anchor=tk.W).pack(fill=tk.X, pady=(0, 6))
+                  anchor="w").pack(fill="x", pady=(0, 6))
 
         # Path display — wraps to the actual column width
         self.path_var = tk.StringVar(value="")
         path_label = ttk.Label(left_col, textvariable=self.path_var,
                                font=('TkDefaultFont', 9),
-                               anchor=tk.NW, justify=tk.LEFT, wraplength=220)
-        path_label.pack(fill=tk.X)
+                               anchor="nw", justify="left", wraplength=220)
+        path_label.pack(fill="x")
 
         def _update_wraplength(event):
             path_label.configure(wraplength=max(event.width - 4, 50))
@@ -371,11 +371,11 @@ class PhotosUploader:
         # ── Canvas — right side, narrower ────────────────────────────────
         self.canvas = tk.Canvas(viewer_frame, bg='#1a1a1a', cursor='crosshair',
                                 height=200)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.bind('<Configure>', self._on_canvas_resize)
 
         # ── Bottom pane: Custom Fields / EXIF stacked vertically ─────────
-        hpane = ttk.PanedWindow(vpane, orient=tk.VERTICAL)
+        hpane = ttk.PanedWindow(vpane, orient="vertical")
         vpane.add(hpane, weight=2)
 
         # ── Custom Fields (left) ──────────────────────────────────────────
@@ -384,17 +384,17 @@ class PhotosUploader:
 
         self.custom_vars = {}
         for i, (key, label) in enumerate(CUSTOM_FIELDS):
-            ttk.Label(custom_frame, text=label + ":", width=22, anchor=tk.E).grid(
-                row=i, column=0, sticky=tk.E, pady=2, padx=(0, 4))
+            ttk.Label(custom_frame, text=label + ":", width=22, anchor="e").grid(
+                row=i, column=0, sticky="e", pady=2, padx=(0, 4))
             if key == 'comments':
-                txt = tk.Text(custom_frame, height=3, width=40, wrap=tk.WORD,
+                txt = tk.Text(custom_frame, height=3, width=40, wrap="word",
                               font=('TkDefaultFont', 9))
-                txt.grid(row=i, column=1, sticky=tk.EW, pady=2)
+                txt.grid(row=i, column=1, sticky="ew", pady=2)
                 self.custom_vars[key] = txt
             else:
                 var = tk.StringVar()
                 entry = ttk.Entry(custom_frame, textvariable=var, width=40)
-                entry.grid(row=i, column=1, sticky=tk.EW, pady=2)
+                entry.grid(row=i, column=1, sticky="ew", pady=2)
                 self.custom_vars[key] = var
         custom_frame.columnconfigure(1, weight=1)
 
@@ -423,7 +423,7 @@ class PhotosUploader:
             if not hasattr(self, '_exif_data'):
                 return
             widget = self.custom_vars['comments']
-            value = widget.get('1.0', tk.END).strip()
+            value = widget.get('1.0', "end").strip()
             self._exif_data['Description'] = value
             self._refresh_exif_tree()
             widget.edit_modified(False)
@@ -436,18 +436,18 @@ class PhotosUploader:
 
         # Edit row packed first (side=BOTTOM) so the tree fills remaining space
         edit_row = ttk.Frame(exif_frame)
-        edit_row.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
-        ttk.Label(edit_row, text="Edit selected value:").pack(side=tk.LEFT, padx=(0, 4))
+        edit_row.pack(side="bottom", fill="x", pady=(4, 0))
+        ttk.Label(edit_row, text="Edit selected value:").pack(side="left", padx=(0, 4))
         self.exif_edit_var = tk.StringVar()
         ttk.Entry(edit_row, textvariable=self.exif_edit_var, width=30).pack(
-            side=tk.LEFT, padx=2)
+            side="left", padx=2)
         ttk.Button(edit_row, text="Apply", command=self._apply_exif_edit).pack(
-            side=tk.LEFT, padx=2)
+            side="left", padx=2)
 
         tree_frame = ttk.Frame(exif_frame)
-        tree_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        tree_frame.pack(side="top", fill="both", expand=True)
 
-        exif_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        exif_scroll = ttk.Scrollbar(tree_frame, orient="vertical")
         self.exif_tree = ttk.Treeview(tree_frame, columns=('key', 'value'),
                                       show='headings',
                                       yscrollcommand=exif_scroll.set)
@@ -456,8 +456,8 @@ class PhotosUploader:
         self.exif_tree.heading('value', text='Value')
         self.exif_tree.column('key', width=160)
         self.exif_tree.column('value', width=260)
-        self.exif_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        exif_scroll.pack(side=tk.LEFT, fill=tk.Y)
+        self.exif_tree.pack(side="left", fill="both", expand=True)
+        exif_scroll.pack(side="left", fill="y")
         self.exif_tree.bind('<<TreeviewSelect>>', self._on_exif_select)
 
         return frame
@@ -475,7 +475,7 @@ class PhotosUploader:
                 added += self._add_folder(p, batch_state)
             elif is_image(p):
                 if self._add_single_image(p, batch_state):
-                    self.input_list.itemconfig(tk.END, {'foreground': '#000'})
+                    self.input_list.itemconfig("end", {'foreground': '#000'})
                     added += 1
         self._update_counts()
         self.set_status(f"Dropped {added} image(s) into input queue.")
@@ -543,7 +543,7 @@ class PhotosUploader:
                f'Existing:  {existing_path}\n'
                f'New:         {new_path}')
         ttk.Label(dlg, text=msg, padding=(12, 10, 12, 6),
-                  wraplength=476, justify=tk.LEFT).pack()
+                  wraplength=476, justify="left").pack()
 
         result = tk.StringVar(value='skip')
 
@@ -557,13 +557,13 @@ class PhotosUploader:
             dlg.destroy()
 
         ttk.Button(btn_frame, text="Skip",
-                   command=lambda: choose('skip')).pack(side=tk.LEFT, padx=4)
+                   command=lambda: choose('skip')).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Skip All",
-                   command=lambda: choose('skip_all')).pack(side=tk.LEFT, padx=4)
+                   command=lambda: choose('skip_all')).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Replace",
-                   command=lambda: choose('replace')).pack(side=tk.LEFT, padx=4)
+                   command=lambda: choose('replace')).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Replace All",
-                   command=lambda: choose('replace_all')).pack(side=tk.LEFT, padx=4)
+                   command=lambda: choose('replace_all')).pack(side="left", padx=4)
 
         dlg.wait_window()
         action = result.get()
@@ -588,7 +588,7 @@ class PhotosUploader:
             self.input_list.delete(idx)
 
         self.input_paths.append(path)
-        self.input_list.insert(tk.END, os.path.basename(path))
+        self.input_list.insert("end", os.path.basename(path))
         return True
 
     # -----------------------------------------------------------------------
@@ -615,7 +615,7 @@ class PhotosUploader:
             self.output_list.delete(i)
             if p not in self.input_paths:
                 self.input_paths.append(p)
-                self.input_list.insert(tk.END, os.path.basename(p))
+                self.input_list.insert("end", os.path.basename(p))
         self._update_counts()
 
     def _move_item(self, listbox, direction):
@@ -633,7 +633,7 @@ class PhotosUploader:
         listbox.insert(i, text_j)
         listbox.delete(j)
         listbox.insert(j, text_i)
-        listbox.selection_clear(0, tk.END)
+        listbox.selection_clear(0, "end")
         listbox.selection_set(j)
 
     def open_output_folder(self):
@@ -670,7 +670,7 @@ class PhotosUploader:
             new_idx = max(0, idx - 1)
         except ValueError:
             new_idx = 0
-        self.input_list.selection_clear(0, tk.END)
+        self.input_list.selection_clear(0, "end")
         self.input_list.selection_set(new_idx)
         self.input_list.see(new_idx)
         self._save_current_custom_fields()
@@ -685,7 +685,7 @@ class PhotosUploader:
             new_idx = min(len(self.input_paths) - 1, idx + 1)
         except ValueError:
             new_idx = 0
-        self.input_list.selection_clear(0, tk.END)
+        self.input_list.selection_clear(0, "end")
         self.input_list.selection_set(new_idx)
         self.input_list.see(new_idx)
         self._save_current_custom_fields()
@@ -738,9 +738,9 @@ class PhotosUploader:
         # Add to input queue and select
         if dest not in self.input_paths:
             self.input_paths.append(dest)
-            self.input_list.insert(tk.END, os.path.basename(dest))
+            self.input_list.insert("end", os.path.basename(dest))
         new_idx = self.input_paths.index(dest)
-        self.input_list.selection_clear(0, tk.END)
+        self.input_list.selection_clear(0, "end")
         self.input_list.selection_set(new_idx)
         self.input_list.see(new_idx)
         self._update_counts()
@@ -780,13 +780,13 @@ class PhotosUploader:
             self.photo_image = ImageTk.PhotoImage(thumb)
             self.canvas.delete('all')
             self.canvas.create_image(cw // 2, ch // 2,
-                                     anchor=tk.CENTER,
+                                     anchor="center",
                                      image=self.photo_image)
         except Exception as e:
             self._cached_image = None
             self._cached_image_path = None
             self.canvas.delete('all')
-            self.canvas.create_text(10, 10, anchor=tk.NW,
+            self.canvas.create_text(10, 10, anchor="nw",
                                     text=f"Cannot display image:\n{e}",
                                     fill='red', font=('TkDefaultFont', 10))
 
@@ -858,11 +858,11 @@ class PhotosUploader:
                         val = f"{val[0]}/{val[1]} ({val[0]/val[1]:.4f})"
                     display_tag = EXIF_TAG_NAMES.get(tag, tag)
                     self._exif_data[display_tag] = str(val)
-                    self.exif_tree.insert('', tk.END, values=(display_tag, str(val)[:120]))
+                    self.exif_tree.insert('', "end", values=(display_tag, str(val)[:120]))
             else:
-                self.exif_tree.insert('', tk.END, values=('(No EXIF data)', ''))
+                self.exif_tree.insert('', "end", values=('(No EXIF data)', ''))
         except Exception as e:
-            self.exif_tree.insert('', tk.END, values=('Error reading EXIF', str(e)))
+            self.exif_tree.insert('', "end", values=('Error reading EXIF', str(e)))
 
     # Date formats accepted when the user types a date
     _DATE_FORMATS = [
@@ -941,7 +941,7 @@ class PhotosUploader:
         self.exif_tree.delete(*self.exif_tree.get_children())
         reselect_iid = None
         for key, val in self._exif_data.items():
-            iid = self.exif_tree.insert('', tk.END, values=(key, str(val)[:120]))
+            iid = self.exif_tree.insert('', "end", values=(key, str(val)[:120]))
             if key == reselect_key:
                 reselect_iid = iid
         if reselect_iid:
@@ -980,7 +980,7 @@ class PhotosUploader:
         for key, widget in self.custom_vars.items():
             val = data.get(key, '')
             if isinstance(widget, tk.Text):
-                widget.delete('1.0', tk.END)
+                widget.delete('1.0', "end")
                 widget.insert('1.0', val)
             else:
                 widget.set(val)
@@ -995,7 +995,7 @@ class PhotosUploader:
         data = {}
         for key, widget in self.custom_vars.items():
             if isinstance(widget, tk.Text):
-                data[key] = widget.get('1.0', tk.END).strip()
+                data[key] = widget.get('1.0', "end").strip()
             else:
                 data[key] = widget.get()
         self.custom_data[self.current_photo] = data
@@ -1004,9 +1004,9 @@ class PhotosUploader:
     # Processing
     # -----------------------------------------------------------------------
     # Characters forbidden in Windows filenames; also covers Linux/macOS
-    _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+    _ILLEGAL_FILENAME_CHARS: re.Pattern[str] = re.compile(r'[\\/:*?"<>|]')
     # Windows reserved names (case-insensitive, with or without extension)
-    _RESERVED_NAMES = re.compile(
+    _RESERVED_NAMES: re.Pattern[str] = re.compile(
         r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$', re.IGNORECASE)
 
     def _validate_output_filename(self, name: str) -> str | None:
@@ -1177,7 +1177,7 @@ class PhotosUploader:
 
         if path not in self.output_paths:
             self.output_paths.append(path)
-            self.output_list.insert(tk.END, os.path.basename(path))
+            self.output_list.insert("end", os.path.basename(path))
 
         self._update_counts()
         self.set_status(f"Queued for upload: {os.path.basename(path)}")
@@ -1185,7 +1185,7 @@ class PhotosUploader:
         # Always clear the viewer first, then load the next photo if there is one
         self._clear_viewer()
         if next_idx is not None:
-            self.input_list.selection_clear(0, tk.END)
+            self.input_list.selection_clear(0, "end")
             self.input_list.selection_set(next_idx)
             self.input_list.see(next_idx)
             self.current_photo = self.input_paths[next_idx]
@@ -1206,7 +1206,7 @@ class PhotosUploader:
         self.exif_tree.delete(*self.exif_tree.get_children())
         for widget in self.custom_vars.values():
             if isinstance(widget, tk.Text):
-                widget.delete('1.0', tk.END)
+                widget.delete('1.0', "end")
             else:
                 widget.set('')
         self._update_button_states()
@@ -1216,21 +1216,21 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     def _update_button_states(self):
         has_output = bool(self.output_paths)
-        self.upload_top_btn.config(state=tk.NORMAL if has_output else tk.DISABLED)
-        self.upload_queue_btn.config(state=tk.NORMAL if has_output else tk.DISABLED)
+        self.upload_top_btn.config(state="normal" if has_output else "disabled")
+        self.upload_queue_btn.config(state="normal" if has_output else "disabled")
         self.revert_btn.config(
-            state=tk.NORMAL if self.current_photo else tk.DISABLED)
+            state="normal" if self.current_photo else "disabled")
         has_input_sel = bool(self.input_list.curselection())
         self.input_remove_btn.config(
-            state=tk.NORMAL if has_input_sel else tk.DISABLED)
+            state="normal" if has_input_sel else "disabled")
         # Prev/Next: enabled only when there is a predecessor/successor in the input queue
         try:
             idx = self.input_paths.index(self.current_photo) if self.current_photo else -1
         except ValueError:
             idx = -1
-        self.prev_btn.config(state=tk.NORMAL if idx > 0 else tk.DISABLED)
-        self.next_btn.config(state=tk.NORMAL if 0 <= idx < len(self.input_paths) - 1
-                             else tk.DISABLED)
+        self.prev_btn.config(state="normal" if idx > 0 else "disabled")
+        self.next_btn.config(state="normal" if 0 <= idx < len(self.input_paths) - 1
+                             else "disabled")
 
     def _update_counts(self):
         self.input_count_var.set(f"{len(self.input_paths)} item(s)")

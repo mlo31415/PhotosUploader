@@ -464,29 +464,29 @@ def add_album(parent: tk.Widget, set_status_cb):
 
     ttk.Label(dlg,
               text="Parent album  (leave unselected to create a top-level album):",
-              padding=(12, 10, 12, 4)).pack(anchor=tk.W)
+              padding=(12, 10, 12, 4)).pack(anchor="w")
 
     # ── Album tree ───────────────────────────────────────────────────────────
     tree_frame = ttk.Frame(dlg, padding=(12, 0, 12, 0))
-    tree_frame.pack(fill=tk.BOTH, expand=True)
+    tree_frame.pack(fill='both', expand=True)
 
-    yscroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
-    xscroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+    yscroll = ttk.Scrollbar(tree_frame, orient='vertical')
+    xscroll = ttk.Scrollbar(tree_frame, orient='horizontal')
     tree = ttk.Treeview(tree_frame, selectmode="browse", show="tree",
                         yscrollcommand=yscroll.set,
                         xscrollcommand=xscroll.set)
     yscroll.config(command=tree.yview)
     xscroll.config(command=tree.xview)
-    yscroll.pack(side=tk.RIGHT, fill=tk.Y)
-    xscroll.pack(side=tk.BOTTOM, fill=tk.X)
-    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    yscroll.pack(side='right', fill="y")
+    xscroll.pack(side='bottom', fill="x")
+    tree.pack(side='left', fill='both', expand=True)
 
     # fullname_by_id: id → fullname, built while populating the tree
     fullname_by_id: dict[int, str] = {}
     node_by_id: dict[int, dict] = {}
 
     if not hierarchy:
-        tree.insert("", tk.END, text="(No album hierarchy loaded — "
+        tree.insert("", 'end', text="(No album hierarchy loaded — "
                     "use 'Download Album Hierarchy' first)", tags=("hint",))
         tree.tag_configure("hint", foreground="gray")
     else:
@@ -502,7 +502,7 @@ def add_album(parent: tk.Widget, set_status_cb):
         def _populate(parent_iid, nodes):
             for node in nodes:
                 iid = str(node["id"])
-                tree.insert(parent_iid, tk.END, iid=iid,
+                tree.insert(parent_iid, 'end', iid=iid,
                             text=node["name"], open=False)
                 if node.get("children"):
                     _populate(iid, node["children"])
@@ -511,20 +511,20 @@ def add_album(parent: tk.Widget, set_status_cb):
 
     # ── Name entry ───────────────────────────────────────────────────────────
     name_frame = ttk.Frame(dlg, padding=(12, 8, 12, 0))
-    name_frame.pack(fill=tk.X)
-    ttk.Label(name_frame, text="New album name:").pack(side=tk.LEFT, padx=(0, 6))
+    name_frame.pack(fill='x')
+    ttk.Label(name_frame, text="New album name:").pack(side='left', padx=(0, 6))
     name_var = tk.StringVar()
     name_entry = ttk.Entry(name_frame, textvariable=name_var, width=32)
-    name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    name_entry.pack(side='left', fill='x', expand=True)
     name_entry.focus_set()
 
     # ── Status / buttons ─────────────────────────────────────────────────────
     status_var = tk.StringVar(value="")
     ttk.Label(dlg, textvariable=status_var, foreground="gray",
-              padding=(12, 4, 12, 0)).pack(anchor=tk.W)
+              padding=(12, 4, 12, 0)).pack(anchor='w')
 
     btn_frame = ttk.Frame(dlg, padding=(12, 6, 12, 12))
-    btn_frame.pack(fill=tk.X)
+    btn_frame.pack(fill='x')
 
     def on_create():
         name = name_var.get().strip()
@@ -625,9 +625,9 @@ def add_album(parent: tk.Widget, set_status_cb):
         set_status_cb("Album creation failed.")
 
     cancel_btn = ttk.Button(btn_frame, text="Cancel", command=dlg.destroy)
-    cancel_btn.pack(side=tk.RIGHT, padx=(4, 0))
+    cancel_btn.pack(side='right', padx=(4, 0))
     create_btn = ttk.Button(btn_frame, text="Create", command=on_create)
-    create_btn.pack(side=tk.RIGHT)
+    create_btn.pack(side='right')
 
     dlg.bind("<Return>", lambda e: on_create())
 
@@ -740,27 +740,27 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
 
     # ── Filter bar ───────────────────────────────────────────────────────────
     filter_frame = ttk.Frame(dlg, padding=(8, 8, 8, 4))
-    filter_frame.pack(fill=tk.X)
-    ttk.Label(filter_frame, text="Filter:").pack(side=tk.LEFT, padx=(0, 6))
+    filter_frame.pack(fill='x')
+    ttk.Label(filter_frame, text="Filter:").pack(side='left', padx=(0, 6))
     filter_var = tk.StringVar()
     filter_entry = ttk.Entry(filter_frame, textvariable=filter_var)
-    filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    filter_entry.pack(side='left', fill='x', expand=True)
     filter_entry.focus_set()
 
     # ── Tree ─────────────────────────────────────────────────────────────────
     tree_frame = ttk.Frame(dlg, padding=(8, 0, 8, 4))
-    tree_frame.pack(fill=tk.BOTH, expand=True)
+    tree_frame.pack(fill='both', expand=True)
 
-    yscroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
-    xscroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+    yscroll = ttk.Scrollbar(tree_frame, orient='vertical')
+    xscroll = ttk.Scrollbar(tree_frame, orient='horizontal')
     tree = ttk.Treeview(tree_frame, selectmode="browse", show="tree",
                         yscrollcommand=yscroll.set,
                         xscrollcommand=xscroll.set)
     yscroll.config(command=tree.yview)
     xscroll.config(command=tree.xview)
-    yscroll.pack(side=tk.RIGHT, fill=tk.Y)
-    xscroll.pack(side=tk.BOTTOM, fill=tk.X)
-    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    yscroll.pack(side='right', fill='y')
+    xscroll.pack(side='bottom', fill='x')
+    tree.pack(side='left', fill='both', expand=True)
     tree.column("#0", minwidth=200)
 
     # Populate; top-level nodes open, children collapsed
@@ -771,7 +771,7 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
             iid     = str(node["id"])
             count   = node["total_nb_images"]
             text    = f"{node['name']}  (id {node['id']}, {count:,} photos)"
-            tree.insert(parent_iid, tk.END, iid=iid, text=text,
+            tree.insert(parent_iid, 'end', iid=iid, text=text,
                         open=top_level)
             all_items.append((iid,
                                node["name"].lower(),
@@ -797,12 +797,12 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
 
     # ── Selected-album label ─────────────────────────────────────────────────
     sel_frame = ttk.Frame(dlg, padding=(8, 0, 8, 6))
-    sel_frame.pack(fill=tk.X)
-    ttk.Label(sel_frame, text="Selected:").pack(side=tk.LEFT, padx=(0, 4))
+    sel_frame.pack(fill='x')
+    ttk.Label(sel_frame, text="Selected:").pack(side='left', padx=(0, 4))
     sel_var = tk.StringVar(value="(none)")
     ttk.Label(sel_frame, textvariable=sel_var,
-              foreground="gray", anchor=tk.W).pack(side=tk.LEFT,
-                                                    fill=tk.X, expand=True)
+              foreground="gray", anchor='w').pack(side='left',
+                                                    fill='x', expand=True)
 
     # Build a fast iid→fullname lookup
     fullname_by_iid = {iid: fn for iid, _, fn in all_items}
@@ -815,7 +815,7 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
 
     # ── Buttons ──────────────────────────────────────────────────────────────
     btn_frame = ttk.Frame(dlg, padding=(8, 0, 8, 10))
-    btn_frame.pack(fill=tk.X)
+    btn_frame.pack(fill='x')
 
     def on_select():
         sel = tree.selection()
@@ -830,9 +830,9 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
         on_select_cb(album_id, fullname)
 
     ttk.Button(btn_frame, text="Cancel",
-               command=dlg.destroy).pack(side=tk.RIGHT, padx=(4, 0))
+               command=dlg.destroy).pack(side='right', padx=(4, 0))
     ttk.Button(btn_frame, text="Select",
-               command=on_select).pack(side=tk.RIGHT)
+               command=on_select).pack(side='right')
     dlg.bind("<Return>", lambda e: on_select())
 
 
