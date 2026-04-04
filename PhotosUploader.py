@@ -1138,6 +1138,14 @@ class PhotosUploader:
         comment  = self.custom_vars['comments'].get('1.0', "end").strip()
         tags     = self.custom_vars['tags'].get().strip()
 
+        # Parse and format date for Piwigo API (MySQL format: YYYY-MM-DD HH:MM:SS)
+        raw_date = self.custom_vars['date_of_photo'].get().strip()
+        date_creation = ''
+        if raw_date:
+            parsed_date = self._parse_date(raw_date)
+            if parsed_date:
+                date_creation = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
+
         # Check against the Piwigo file dictionary — block duplicates already on server
         file_dict = self._load_file_dict()
         if output_filename in file_dict:
@@ -1188,6 +1196,7 @@ class PhotosUploader:
         # Create a temp copy without EXIF to avoid Piwigo errors
         temp_path = self._create_temp_copy_without_exif(path)
         upload_path = temp_path if temp_path else path
+        print(f"[upload] PhotosUploader: album_id={album_id}, album={album}, path={upload_path}")
 
         def worker():
             client = DownloadAlbumStructure.PiwigoClient(
@@ -1199,7 +1208,7 @@ class PhotosUploader:
                 result = client.upload_image(
                     upload_path, album_id,
                     name=output_filename, author=author, comment=comment,
-                    tags=tags,
+                    tags=tags, date_creation=date_creation,
                 )
                 image_id = int(result.get('image_id', 0))
                 self.root.after(0, lambda: finish_ok(image_id))

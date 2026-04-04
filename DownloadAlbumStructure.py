@@ -149,6 +149,7 @@ class PiwigoClient:
         Returns the API result dict which contains 'image_id' on success.
         """
         filename = path.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+        print(f"[upload] uploading {filename} to category_id {category_id}")
         data = {
             'method':   'pwg.images.addSimple',
             'category': str(category_id),
