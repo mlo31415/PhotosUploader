@@ -1257,6 +1257,14 @@ class PhotosUploader:
                     os.remove(temp_path)
                 except Exception:
                     pass
+
+            # Remove the uploaded file from the input list
+            if path in self.input_paths:
+                idx = self.input_paths.index(path)
+                self.input_paths.pop(idx)
+                self.input_list.delete(idx)
+                self._update_counts()
+
             self._record_upload(path, album, album_id=album_id, file_id=image_id)
             self.set_status(
                 f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
