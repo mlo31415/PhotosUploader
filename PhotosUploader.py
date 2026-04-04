@@ -8,6 +8,7 @@ import os
 import re
 import json
 import shutil
+import tempfile
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -1074,6 +1075,37 @@ class PhotosUploader:
         DownloadAlbumStructure.record_uploaded_file(
             filename, album_fullname, album_id=album_id, file_id=file_id)
 
+    def _create_temp_copy_without_exif(self, path: str) -> str | None:
+        """Create a temp copy of the file with EXIF data stripped.
+
+        Returns the path to the temp file, or None if stripping fails.
+        Caller is responsible for deleting the temp file after use.
+        """
+        if not PIEXIF_AVAILABLE:
+            # No piexif available, just use the original file
+            return None
+
+        try:
+            # Create temp file with same name and extension
+            filename = os.path.basename(path)
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, filename)
+
+            # Copy original to temp location
+            shutil.copy2(path, temp_path)
+
+            # Strip EXIF from temp copy
+            try:
+                exif_dict = piexif.load(temp_path)
+                piexif.insert(piexif.dump({}), temp_path)
+            except Exception:
+                pass  # Continue even if stripping fails
+
+            return temp_path
+        except Exception as e:
+            self.set_status(f"Warning: could not create temp copy: {e}")
+            return None
+
     def _upload_current_photo(self):
         """Upload the currently displayed photo to the selected Piwigo album."""
         if not self.current_photo:
@@ -1105,7 +1137,6 @@ class PhotosUploader:
         author   = self.custom_vars['photo_source'].get().strip()
         comment  = self.custom_vars['comments'].get('1.0', "end").strip()
         tags     = self.custom_vars['tags'].get().strip()
-        name     = output_filename.split('.')[0] if '.' in output_filename else output_filename
 
         # Check against the Piwigo file dictionary — block duplicates already on server
         file_dict = self._load_file_dict()
@@ -1124,8 +1155,39 @@ class PhotosUploader:
             self.set_status(f"Blocked: {output_filename} already exists on Piwigo.")
             return
 
+        # Rename the file if output filename differs from current name
+        _, current_ext = os.path.splitext(original_filename)
+        if output_filename and output_filename != original_filename:
+            _, out_ext = os.path.splitext(output_filename)
+            new_name = output_filename if out_ext else output_filename + current_ext
+            new_path = os.path.join(os.path.dirname(path), new_name)
+            if os.path.exists(new_path) and new_path != path:
+                messagebox.showwarning(
+                    "Rename Failed",
+                    f'Cannot rename to "{new_name}": a file with that name already exists.',
+                    parent=self.root,
+                )
+                self.set_status("Upload blocked: rename target already exists.")
+                return
+            try:
+                os.rename(path, new_path)
+                path = new_path
+                self.current_photo = new_path
+            except Exception as e:
+                messagebox.showwarning(
+                    "Rename Failed",
+                    f'Could not rename "{original_filename}" to "{new_name}":\n{e}',
+                    parent=self.root,
+                )
+                self.set_status("Upload blocked: rename failed.")
+                return
+
         self.set_status(f"Uploading {output_filename}…")
         self.root.update_idletasks()
+
+        # Create a temp copy without EXIF to avoid Piwigo errors
+        temp_path = self._create_temp_copy_without_exif(path)
+        upload_path = temp_path if temp_path else path
 
         def worker():
             client = DownloadAlbumStructure.PiwigoClient(
@@ -1135,8 +1197,8 @@ class PhotosUploader:
             try:
                 client.login(params['username'], params['password'])
                 result = client.upload_image(
-                    path, album_id,
-                    name=name, author=author, comment=comment,
+                    upload_path, album_id,
+                    name=output_filename, author=author, comment=comment,
                     tags=tags,
                 )
                 image_id = int(result.get('image_id', 0))
@@ -1148,11 +1210,23 @@ class PhotosUploader:
                 client.logout()
 
         def finish_ok(image_id):
+            # Clean up temp copy if one was created
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
             self._record_upload(path, album, album_id=album_id, file_id=image_id)
             self.set_status(
                 f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
 
         def finish_err(err):
+            # Clean up temp copy if one was created
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
             messagebox.showerror("Upload Failed",
                                  f"Could not upload {output_filename}:\n\n{err}",
                                  parent=self.root)
