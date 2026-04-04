@@ -8,6 +8,7 @@ import os
 import re
 import json
 import shutil
+import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox
@@ -151,6 +152,8 @@ class PhotosUploader:
         self.output_paths = []      # list of str
         self.current_photo = None   # str path
         self.photo_image = None     # ImageTk reference
+        self._cached_image = None           # PIL Image (full-size, not thumbnailed)
+        self._cached_image_path = None      # path matching _cached_image
         self.custom_data = {}       # path -> dict of custom field values
         self._field_links = []      # list of link descriptors; see _register_field_link
         self.status_var = tk.StringVar(value="Ready.")
@@ -204,8 +207,6 @@ class PhotosUploader:
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Label(status_bar, textvariable=self.status_var, anchor=tk.W).pack(
             side=tk.LEFT, padx=6, pady=2)
-        self.progress = ttk.Progressbar(status_bar, length=200, mode='determinate')
-        self.progress.pack(side=tk.RIGHT, padx=6, pady=2)
 
     def _build_queue_panel(self, parent, title: str, is_input: bool) -> ttk.Frame:
         frame = ttk.LabelFrame(parent, text=title, padding=4)
@@ -333,12 +334,16 @@ class PhotosUploader:
 
         nav = ttk.Frame(left_col)
         nav.pack(fill=tk.X, pady=(0, 4))
-        ttk.Button(nav, text="◀ Prev",   command=self.prev_photo).pack(side=tk.LEFT, padx=2)
+        self.prev_btn = ttk.Button(nav, text="◀ Prev", command=self.prev_photo,
+                                   state=tk.DISABLED)
+        self.prev_btn.pack(side=tk.LEFT, padx=2)
         self.revert_btn = ttk.Button(nav, text="↺ Revert",
                                      command=self._revert_photo,
                                      state=tk.DISABLED)
         self.revert_btn.pack(side=tk.LEFT, padx=2)
-        ttk.Button(nav, text="Next ▶",   command=self.next_photo).pack(side=tk.LEFT, padx=2)
+        self.next_btn = ttk.Button(nav, text="Next ▶", command=self.next_photo,
+                                   state=tk.DISABLED)
+        self.next_btn.pack(side=tk.LEFT, padx=2)
 
         ttk.Button(left_col, text="☁ Queue for Upload",
                    command=self._queue_for_upload).pack(fill=tk.X, pady=(0, 6))
@@ -416,8 +421,6 @@ class PhotosUploader:
         # comments uses tk.Text (not StringVar) so it cannot use _register_field_link
         def _on_comments_changed(_event=None):
             if not hasattr(self, '_exif_data'):
-                return
-            if getattr(self, '_exif_has_description', False):
                 return
             widget = self.custom_vars['comments']
             value = widget.get('1.0', tk.END).strip()
@@ -605,18 +608,6 @@ class PhotosUploader:
             self.output_list.delete(i)
         self._update_counts()
 
-    def clear_input(self):
-        if messagebox.askyesno("Clear Input", "Remove all items from the input queue?"):
-            self.input_paths.clear()
-            self.input_list.delete(0, tk.END)
-            self._update_counts()
-
-    def clear_output(self):
-        if messagebox.askyesno("Clear Output", "Remove all items from the output queue?"):
-            self.output_paths.clear()
-            self.output_list.delete(0, tk.END)
-            self._update_counts()
-
     def return_to_input(self):
         sel = list(self.output_list.curselection())
         for i in reversed(sel):
@@ -773,17 +764,27 @@ class PhotosUploader:
             self.canvas.create_text(200, 150, text="Pillow not installed", fill='white')
             return
         try:
-            img = Image.open(path)
-            self.photo_dim_var.set(f"{img.width} × {img.height} px  |  {img.mode}")
+            if path != self._cached_image_path:
+                self._cached_image = Image.open(path)  # type: ignore[possibly-undefined]
+                self._cached_image_path = path
+                self.photo_dim_var.set(
+                    f"{self._cached_image.width} × {self._cached_image.height} px"
+                    f"  |  {self._cached_image.mode}")
+            img = self._cached_image
+            if img is None:
+                return
             cw = max(self.canvas.winfo_width(), 100)
             ch = max(self.canvas.winfo_height(), 100)
-            img.thumbnail((cw, ch), Image.LANCZOS)
-            self.photo_image = ImageTk.PhotoImage(img)
+            thumb = img.copy()
+            thumb.thumbnail((cw, ch), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
+            self.photo_image = ImageTk.PhotoImage(thumb)
             self.canvas.delete('all')
             self.canvas.create_image(cw // 2, ch // 2,
                                      anchor=tk.CENTER,
                                      image=self.photo_image)
         except Exception as e:
+            self._cached_image = None
+            self._cached_image_path = None
             self.canvas.delete('all')
             self.canvas.create_text(10, 10, anchor=tk.NW,
                                     text=f"Cannot display image:\n{e}",
@@ -840,12 +841,13 @@ class PhotosUploader:
     def _load_exif(self, path: str):
         self.exif_tree.delete(*self.exif_tree.get_children())
         self._exif_data = {}
-        self._exif_has_description  = False
-        self._exif_has_date_created = False
         if not PIL_AVAILABLE:
             return
         try:
-            img = Image.open(path)
+            img = (self._cached_image if self._cached_image_path == path
+                   else Image.open(path))  # type: ignore[possibly-undefined]
+            if img is None:
+                return
             raw = img._getexif() if hasattr(img, '_getexif') else None
             if raw:
                 for tag_id, val in raw.items():
@@ -857,15 +859,9 @@ class PhotosUploader:
                     display_tag = EXIF_TAG_NAMES.get(tag, tag)
                     self._exif_data[display_tag] = str(val)
                     self.exif_tree.insert('', tk.END, values=(display_tag, str(val)[:120]))
-                self._exif_has_description  = bool(self._exif_data.get('Description'))
-                self._exif_has_date_created = bool(self._exif_data.get('Date Created'))
             else:
-                self._exif_has_description  = False
-                self._exif_has_date_created = False
                 self.exif_tree.insert('', tk.END, values=('(No EXIF data)', ''))
         except Exception as e:
-            self._exif_has_description  = False
-            self._exif_has_date_created = False
             self.exif_tree.insert('', tk.END, values=('Error reading EXIF', str(e)))
 
     # Date formats accepted when the user types a date
@@ -898,8 +894,10 @@ class PhotosUploader:
             return
         iptc = {}
         try:
-            img = Image.open(path)
-            iptc = IptcImagePlugin.getiptcinfo(img) or {}
+            img = (self._cached_image if self._cached_image_path == path
+                   else Image.open(path))  # type: ignore[possibly-undefined]
+            if img is not None:
+                iptc = IptcImagePlugin.getiptcinfo(img) or {}  # type: ignore[possibly-undefined]
         except Exception:
             pass
 
@@ -973,11 +971,6 @@ class PhotosUploader:
                     break
         self._refresh_exif_tree(reselect_key=vals[0] if vals else "")
         self.set_status(f"EXIF field '{vals[0]}' updated (pending save).")
-
-    # File info tab and separate file-info widget removed; path shown in `path_var`.
-
-    # (File info method removed — path displayed in `path_var`)
-
 
     # -----------------------------------------------------------------------
     # Custom fields
@@ -1203,6 +1196,8 @@ class PhotosUploader:
         """Reset the photo viewer, EXIF tree, and all custom fields to empty."""
         self.current_photo = None
         self.photo_image   = None
+        self._cached_image = None
+        self._cached_image_path = None
         self.photo_label_var.set("No photo selected")
         self.photo_dim_var.set("")
         self.path_var.set("")
@@ -1228,6 +1223,14 @@ class PhotosUploader:
         has_input_sel = bool(self.input_list.curselection())
         self.input_remove_btn.config(
             state=tk.NORMAL if has_input_sel else tk.DISABLED)
+        # Prev/Next: enabled only when there is a predecessor/successor in the input queue
+        try:
+            idx = self.input_paths.index(self.current_photo) if self.current_photo else -1
+        except ValueError:
+            idx = -1
+        self.prev_btn.config(state=tk.NORMAL if idx > 0 else tk.DISABLED)
+        self.next_btn.config(state=tk.NORMAL if 0 <= idx < len(self.input_paths) - 1
+                             else tk.DISABLED)
 
     def _update_counts(self):
         self.input_count_var.set(f"{len(self.input_paths)} item(s)")
@@ -1324,7 +1327,6 @@ class PhotosUploader:
                                  parent=self.root)
             self.set_status(f"Upload failed: {filename}")
 
-        import threading
         threading.Thread(target=worker, daemon=True).start()
 
     def _upload_queue(self):
