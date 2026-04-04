@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # State persistence
 # ---------------------------------------------------------------------------
-STATE_FILE = Path(".") / "PhotosUploader State.json"
+STATE_FILE = DownloadAlbumStructure.get_data_dir() / "PhotosUploader State.json"
 
 
 def _window_is_on_a_monitor(hwnd: int) -> bool:

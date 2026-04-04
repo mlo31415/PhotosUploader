@@ -41,9 +41,20 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # File paths
 # ---------------------------------------------------------------------------
+def get_data_dir() -> Path:
+    """Get the data directory from params.json, defaulting to '.' if not set."""
+    try:
+        params = load_params()
+        data_path = params.get('path', '.')
+        return Path(data_path)
+    except Exception:
+        # If params can't be loaded, default to current directory
+        return Path('.')
+
+
 PARAMS_FILE          = Path(".") / "PhotosUploader Params.json"
-ALBUM_HIERARCHY_FILE = Path(".") / "AlbumHierarchy.json"
-FILE_INDEX_FILE      = Path(".") / "FileDict.json"
+ALBUM_HIERARCHY_FILE = get_data_dir() / "AlbumHierarchy.json"
+FILE_INDEX_FILE      = get_data_dir() / "FileDict.json"
 REQUIRED_PARAMS      = ("url", "username", "password")
 
 
@@ -61,7 +72,9 @@ def load_params() -> dict:
             '  "username": "your-username-here",\n'
             '  "password": "your-password-here",\n'
             '  "verify_ssl": false\n'
-            '}'
+            '}\n\n'
+            'Optional: Add "path" field to store data files elsewhere (defaults to "."):\n'
+            '  "path": "/path/to/data/directory"'
         )
     with open(PARAMS_FILE) as f:
         params = json.load(f)
