@@ -28,6 +28,7 @@ import warnings
 import tkinter as tk
 from tkinter import ttk, messagebox
 from pathlib import Path
+from typing import Any
 
 try:
     import requests
@@ -61,7 +62,7 @@ REQUIRED_PARAMS      = ("url", "username", "password")
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-def load_params() -> dict:
+def load_params() -> dict[str, Any]:
     """Load Piwigo connection parameters from PhotosUploader Params.json."""
     if not PARAMS_FILE.exists():
         raise FileNotFoundError(
@@ -230,7 +231,7 @@ class PiwigoClient:
 # ---------------------------------------------------------------------------
 # Hierarchy builder
 # ---------------------------------------------------------------------------
-def _build_hierarchy(flat: list) -> list:
+def _build_hierarchy(flat: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert a flat list of Piwigo category dicts into a nested tree.
 
     Each node in the result has:

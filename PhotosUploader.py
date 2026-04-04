@@ -12,6 +12,7 @@ import tempfile
 import threading
 import logging
 import tkinter as tk
+from typing import Any
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
@@ -68,7 +69,7 @@ def _window_is_on_a_monitor(hwnd: int) -> bool:
         return True  # assume visible if the API fails
 
 
-def load_state() -> dict:
+def load_state() -> dict[str, Any]:
     if STATE_FILE.exists():
         try:
             with open(STATE_FILE) as f:
@@ -78,7 +79,7 @@ def load_state() -> dict:
     return {}
 
 
-def save_state(state: dict):
+def save_state(state: dict[str, Any]) -> None:
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
@@ -127,7 +128,7 @@ def is_image(path: str) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXTENSIONS
 
 
-def parse_dnd_paths(data: str) -> list:
+def parse_dnd_paths(data: str) -> list[str]:
     """Parse drag-and-drop path string into a list of file paths."""
     paths = []
     # tkinterdnd2 wraps paths with spaces in braces
@@ -499,7 +500,7 @@ class PhotosUploader:
         self.set_status(f"Added {added} image(s) to input queue.")
 
 
-    def _add_folder(self, folder: str, batch_state: dict | None = None) -> int:
+    def _add_folder(self, folder: str, batch_state: dict[str, str] | None = None) -> int:
         if batch_state is None:
             batch_state = {}
         added = 0
@@ -520,7 +521,7 @@ class PhotosUploader:
         return None
 
     def _show_conflict_dialog(self, new_path: str, existing_path: str,
-                              batch_state: dict) -> str:
+                              batch_state: dict[str, str]) -> str:
         """Ask the user how to resolve a filename conflict.
 
         Returns 'skip' or 'replace'.  Sets batch_state['all'] to the chosen
@@ -570,7 +571,7 @@ class PhotosUploader:
         action = result.get()
         return 'skip' if action in ('skip', 'skip_all') else 'replace'
 
-    def _add_single_image(self, path: str, batch_state: dict) -> bool:
+    def _add_single_image(self, path: str, batch_state: dict[str, str]) -> bool:
         """Add one image to the input queue, handling name conflicts.
 
         Returns True if the image was added.
@@ -998,7 +999,7 @@ class PhotosUploader:
                     'or end with a period.')
         return None
 
-    def _load_file_dict(self) -> dict:
+    def _load_file_dict(self) -> dict[str, list[dict[str, Any]]]:
         """Load FileDict.json and return it, or an empty dict if unavailable."""
         p = Path(DownloadAlbumStructure.FILE_INDEX_FILE)
         if not p.exists():
