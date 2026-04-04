@@ -156,9 +156,12 @@ class PhotosUploader:
         self._field_links = []      # list of link descriptors; see _register_field_link
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
+        self.upload_album_id  = 0
         self.state_data = load_state()
         if self.state_data.get("upload_album"):
             self.upload_album_var.set(self.state_data["upload_album"])
+        if self.state_data.get("upload_album_id"):
+            self.upload_album_id = int(self.state_data["upload_album_id"])
 
         self._build_ui()
         self._bind_shortcuts()
@@ -212,6 +215,10 @@ class PhotosUploader:
             # Album selection sits at the very top of the upload panel
             album_btn_row = ttk.Frame(frame)
             album_btn_row.pack(fill=tk.X, pady=(0, 2))
+            self.upload_top_btn = ttk.Button(album_btn_row, text="Upload Top Image",
+                                             command=self._upload_top_image,
+                                             state=tk.DISABLED)
+            self.upload_top_btn.pack(side=tk.LEFT, padx=2)
             self.upload_queue_btn = ttk.Button(album_btn_row, text="Upload Queue",
                                                command=self._upload_queue,
                                                state=tk.DISABLED)
@@ -640,7 +647,8 @@ class PhotosUploader:
         listbox.selection_set(j)
 
     def open_output_folder(self):
-        def on_select(_album_id, fullname):
+        def on_select(album_id, fullname):
+            self.upload_album_id = album_id
             self.upload_album_var.set(fullname)
             self.set_status(f"Upload album set to: {fullname}")
         DownloadAlbumStructure.pick_album(self.root, self.set_status, on_select)
@@ -1197,8 +1205,9 @@ class PhotosUploader:
     # Utilities
     # -----------------------------------------------------------------------
     def _update_button_states(self):
-        self.upload_queue_btn.config(
-            state=tk.NORMAL if self.output_paths else tk.DISABLED)
+        has_output = bool(self.output_paths)
+        self.upload_top_btn.config(state=tk.NORMAL if has_output else tk.DISABLED)
+        self.upload_queue_btn.config(state=tk.NORMAL if has_output else tk.DISABLED)
         self.revert_btn.config(
             state=tk.NORMAL if self.current_photo else tk.DISABLED)
         has_input_sel = bool(self.input_list.curselection())
@@ -1228,6 +1237,81 @@ class PhotosUploader:
         filename = os.path.basename(path)
         DownloadAlbumStructure.record_uploaded_file(
             filename, album_fullname, album_id=album_id, file_id=file_id)
+
+    def _upload_top_image(self):
+        """Upload the first item in the upload queue to the selected Piwigo album."""
+        if not self.output_paths:
+            self.set_status("Upload queue is empty.")
+            return
+
+        album    = self.upload_album_var.get()
+        album_id = self.upload_album_id
+        if not album or album == "(none)" or album_id == 0:
+            messagebox.showerror(
+                "No Album Selected",
+                "Please select an upload album before uploading.\n\n"
+                "Use the 'Change Upload Album' button to choose an album.",
+                parent=self.root,
+            )
+            return
+
+        path = self.output_paths[0]
+
+        try:
+            params = DownloadAlbumStructure.load_params()
+        except (FileNotFoundError, ValueError) as exc:
+            messagebox.showerror("Configuration error", str(exc), parent=self.root)
+            return
+
+        # Gather custom field values for this file
+        custom   = self.custom_data.get(path, {})
+        filename = os.path.basename(path)
+        name     = custom.get('output_filename', '').strip() or os.path.splitext(filename)[0]
+        author   = custom.get('photo_source', '').strip()
+        comment  = custom.get('comments', '').strip()
+        tags     = custom.get('tags', '').strip()
+        date_creation = custom.get('date_of_photo', '').strip()
+
+        self.set_status(f"Uploading {filename}…")
+        self.root.update_idletasks()
+
+        def worker():
+            client = DownloadAlbumStructure.PiwigoClient(
+                params['url'], params['username'], params['password'],
+                verify_ssl=params.get('verify_ssl', True),
+            )
+            try:
+                client.login(params['username'], params['password'])
+                result = client.upload_image(
+                    path, album_id,
+                    name=name, author=author, comment=comment,
+                    tags=tags, date_creation=date_creation,
+                )
+                image_id = int(result.get('image_id', 0))
+                self.root.after(0, lambda: finish_ok(image_id))
+            except Exception as exc:
+                err = str(exc)
+                self.root.after(0, lambda: finish_err(err))
+            finally:
+                client.logout()
+
+        def finish_ok(image_id):
+            # Remove from queue
+            self.output_paths.pop(0)
+            self.output_list.delete(0)
+            self._update_counts()
+            self._record_upload(path, album, album_id=album_id, file_id=image_id)
+            self.set_status(
+                f"Uploaded {filename} → '{album}' (image id {image_id}).")
+
+        def finish_err(err):
+            messagebox.showerror("Upload Failed",
+                                 f"Could not upload {filename}:\n\n{err}",
+                                 parent=self.root)
+            self.set_status(f"Upload failed: {filename}")
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
 
     def _upload_queue(self):
         if not self.output_paths:
@@ -1283,7 +1367,8 @@ class PhotosUploader:
         w, h = self.root.winfo_width(), self.root.winfo_height()
         self.state_data["geometry"] = f"{w}x{h}+{x}+{y}"
         album = self.upload_album_var.get()
-        self.state_data["upload_album"] = album if album != "(none)" else ""
+        self.state_data["upload_album"]    = album if album != "(none)" else ""
+        self.state_data["upload_album_id"] = self.upload_album_id
         save_state(self.state_data)
         self.root.destroy()
 
