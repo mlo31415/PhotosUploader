@@ -1177,7 +1177,7 @@ class PhotosUploader:
             if parsed_date:
                 date_creation = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Check against the Piwigo file dictionary — block duplicates already on server
+        # Check against the Piwigo file dictionary — ask before overwriting
         file_dict = self._load_file_dict()
         if output_filename in file_dict:
             entries = file_dict[output_filename]
@@ -1185,14 +1185,15 @@ class PhotosUploader:
                 e.get("fullname", str(e)) if isinstance(e, dict) else str(e)
                 for e in entries
             )
-            messagebox.showwarning(
+            proceed = messagebox.askyesno(
                 "File Already on Piwigo",
                 f'"{output_filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
-                "Upload blocked to prevent overwriting.",
+                "Do you want to overwrite it?",
                 parent=self.root,
             )
-            self.set_status(f"Blocked: {output_filename} already exists on Piwigo.")
-            return
+            if not proceed:
+                self.set_status(f"Upload cancelled: {output_filename} already exists on Piwigo.")
+                return
 
         # Rename the file if output filename differs from current name
         _, current_ext = os.path.splitext(original_filename)
