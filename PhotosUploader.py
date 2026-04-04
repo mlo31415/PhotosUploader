@@ -1,7 +1,7 @@
 """
 PhotosUploader.py
 A GUI application for photo processing workflows.
-Requires: pip install Pillow tkinterdnd2
+Requires: pip install Pillow tkinterdnd2 piexif
 """
 
 import os
@@ -21,6 +21,14 @@ except ImportError:
     PIL_AVAILABLE = False
     print("WARNING: Pillow not installed. Run: pip install Pillow")
 
+
+try:
+    import piexif
+    PIEXIF_AVAILABLE = True
+except ImportError:
+    piexif = None  # type: ignore[assignment]
+    PIEXIF_AVAILABLE = False
+    print("WARNING: piexif not installed. Run: pip install piexif")
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -391,6 +399,12 @@ class PhotosUploader:
             exif_key    = 'Date Created',
             iptc_tag    = (2, 55),   # Date Created
             validate_fn = self._parse_date,
+        )
+        self._register_field_link(
+            custom_key  = 'tags',
+            exif_key    = None,      # no EXIF tag for keywords
+            iptc_tag    = (2, 25),   # Keywords (multi-valued)
+            validate_fn = None,      # any string is valid
         )
 
         # comments uses tk.Text (not StringVar) so it cannot use _register_field_link
@@ -775,7 +789,7 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # EXIF
     # -----------------------------------------------------------------------
-    def _register_field_link(self, custom_key: str, exif_key: str,
+    def _register_field_link(self, custom_key: str, exif_key: str | None,
                              iptc_tag: tuple, validate_fn=None):
         """Register a bidirectional link between a custom StringVar field,
         an EXIF display-name key, and an IPTC tag tuple (e.g. (2, 80)).
@@ -808,7 +822,8 @@ class PhotosUploader:
                 return
             link['syncing'] = True
             try:
-                self._exif_data[exif_key] = value
+                if exif_key is not None:
+                    self._exif_data[exif_key] = value
                 self._refresh_exif_tree()
             finally:
                 link['syncing'] = False
@@ -882,14 +897,18 @@ class PhotosUploader:
             pass
 
         for link in self._field_links:
-            # Read IPTC tag
+            # Read IPTC tag — may be a single bytes value or a list (e.g. Keywords)
             raw = iptc.get(link['iptc_tag'], b'')
             if isinstance(raw, list):
-                raw = raw[0]
-            value = bytes(raw).decode('utf-8', errors='replace').strip() if raw else ''
+                # Multi-valued: decode each entry and join with ", "
+                parts = [bytes(r).decode('utf-8', errors='replace').strip()
+                         for r in raw if r]
+                value = ', '.join(p for p in parts if p)
+            else:
+                value = bytes(raw).decode('utf-8', errors='replace').strip() if raw else ''
 
-            # Fall back to EXIF if IPTC tag is absent
-            if not value:
+            # Fall back to EXIF if IPTC tag is absent and an EXIF key is defined
+            if not value and link['exif_key'] is not None:
                 value = self._exif_data.get(link['exif_key'], '')
 
             # Populate the custom field under the reentrancy guard
@@ -900,7 +919,8 @@ class PhotosUploader:
                 link['syncing'] = False
 
             # Keep _exif_data in sync so the tree always shows the row
-            self._exif_data[link['exif_key']] = value
+            if link['exif_key'] is not None:
+                self._exif_data[link['exif_key']] = value
 
         self._refresh_exif_tree()
 
@@ -964,6 +984,10 @@ class PhotosUploader:
                 widget.insert('1.0', val)
             else:
                 widget.set(val)
+        # Pre-fill output filename with the current filename if not already set
+        out_var = self.custom_vars['output_filename']
+        if not out_var.get().strip():
+            out_var.set(os.path.basename(path))
 
     def _save_current_custom_fields(self):
         if not self.current_photo:
@@ -1011,6 +1035,36 @@ class PhotosUploader:
         except Exception:
             return {}
 
+    def _write_exif_fields(self, path: str):
+        """Write Comments → ImageDescription, Photographer/Source → Artist,
+        and Output Filename → DocumentName into the file's EXIF block.
+
+        Only writes tags that have a non-empty value in the custom fields.
+        Silently skips if piexif is unavailable or the write fails.
+        DocumentName (0x010D) is the closest standard EXIF tag to "Filename".
+        """
+        if not PIEXIF_AVAILABLE:
+            return
+        assert piexif is not None
+        custom = self.custom_data.get(path, {})
+        comments = custom.get('comments', '').strip()
+        source   = custom.get('photo_source', '').strip()
+        out_name = custom.get('output_filename', '').strip()
+        if not any([comments, source, out_name]):
+            return
+        try:
+            exif_dict = piexif.load(path)
+            ifd = exif_dict.setdefault('0th', {})
+            if comments:
+                ifd[piexif.ImageIFD.ImageDescription] = comments.encode('utf-8')
+            if source:
+                ifd[piexif.ImageIFD.Artist] = source.encode('utf-8')
+            if out_name:
+                ifd[piexif.ImageIFD.DocumentName] = out_name.encode('utf-8')
+            piexif.insert(piexif.dump(exif_dict), path)
+        except Exception as e:
+            self.set_status(f"Warning: could not write EXIF to {os.path.basename(path)}: {e}")
+
     def _queue_for_upload(self):
         """Move the current photo to the output queue, then show the next one."""
         if not self.current_photo:
@@ -1026,6 +1080,46 @@ class PhotosUploader:
             messagebox.showwarning("Invalid Output Filename", err, parent=self.root)
             self.set_status("Queue blocked: invalid output filename.")
             return
+
+        # Write custom field values into the file's EXIF before queuing
+        self._write_exif_fields(path)
+
+        # Rename the file if an output filename was given and differs from current name
+        current_name = os.path.basename(path)
+        _, current_ext = os.path.splitext(current_name)
+        if out_name and out_name != current_name:
+            # Preserve the original extension if the user didn't supply one
+            _, out_ext = os.path.splitext(out_name)
+            new_name = out_name if out_ext else out_name + current_ext
+            new_path = os.path.join(os.path.dirname(path), new_name)
+            if os.path.exists(new_path) and new_path != path:
+                messagebox.showwarning(
+                    "Rename Failed",
+                    f'Cannot rename to "{new_name}": a file with that name already exists.',
+                    parent=self.root,
+                )
+                self.set_status("Queue blocked: rename target already exists.")
+                return
+            try:
+                os.rename(path, new_path)
+            except Exception as e:
+                messagebox.showwarning(
+                    "Rename Failed",
+                    f'Could not rename "{current_name}" to "{new_name}":\n{e}',
+                    parent=self.root,
+                )
+                self.set_status("Queue blocked: rename failed.")
+                return
+            # Update all references from old path to new path
+            if path in self.custom_data:
+                self.custom_data[new_path] = self.custom_data.pop(path)
+            if path in self.input_paths:
+                idx = self.input_paths.index(path)
+                self.input_paths[idx] = new_path
+                self.input_list.delete(idx)
+                self.input_list.insert(idx, new_name)
+            path = new_path
+            self.current_photo = new_path
 
         filename = os.path.basename(path)
 
