@@ -138,6 +138,47 @@ class PiwigoClient:
         result = self._call("pwg.categories.add", params)
         return int(result.get("id", 0))
 
+    def upload_image(self, path: str, category_id: int, name: str = '',
+                     author: str = '', comment: str = '',
+                     tags: str = '', date_creation: str = '') -> dict:
+        """Upload a single image file to Piwigo via pwg.images.addSimple.
+
+        Returns the API result dict which contains 'image_id' on success.
+        """
+        filename = path.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+        data = {
+            'method':   'pwg.images.addSimple',
+            'category': str(category_id),
+        }
+        if name:
+            data['name'] = name
+        if author:
+            data['author'] = author
+        if comment:
+            data['comment'] = comment
+        if tags:
+            data['tags'] = tags
+        if date_creation:
+            data['date_creation'] = date_creation
+        with warnings.catch_warnings():
+            if not self._verify_ssl:
+                warnings.simplefilter('ignore', urllib3.exceptions.InsecureRequestWarning)
+            with open(path, 'rb') as fh:
+                r = self.session.post(
+                    self.api_url,
+                    data=data,
+                    files={'image': (filename, fh, 'image/jpeg')},
+                    timeout=120,
+                )
+        r.raise_for_status()
+        try:
+            resp = r.json()
+        except ValueError:
+            raise RuntimeError(f"Server did not return valid JSON for upload of {filename}")
+        if resp.get('stat') != 'ok':
+            raise RuntimeError(resp.get('message', 'Unknown Piwigo upload error'))
+        return resp.get('result', {})
+
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
 
