@@ -448,9 +448,43 @@ def add_album(parent: tk.Widget, set_status_cb):
     if ALBUM_HIERARCHY_FILE.exists():
         try:
             with open(ALBUM_HIERARCHY_FILE, encoding="utf-8") as f:
-                hierarchy = json.load(f)
-        except Exception:
-            pass
+                data = json.load(f)
+            # Validate that it's a list (expected hierarchy format)
+            if not isinstance(data, list):
+                raise ValueError(f"Expected a list, got {type(data).__name__}")
+            hierarchy = data
+        except json.JSONDecodeError as e:
+            messagebox.showerror(
+                "Invalid Album Data",
+                f"The album hierarchy file is corrupted (invalid JSON):\n\n{e}\n\n"
+                "To fix this, download the album hierarchy again:\n"
+                "1. Click 'Download Album Hierarchy' in the main window\n"
+                "2. Try adding a new album again",
+                parent=parent,
+            )
+            return
+        except (ValueError, TypeError) as e:
+            messagebox.showerror(
+                "Invalid Album Data",
+                f"The album hierarchy file has an unexpected format:\n\n{e}\n\n"
+                "To fix this, download the album hierarchy again:\n"
+                "1. Click 'Download Album Hierarchy' in the main window\n"
+                "2. Try adding a new album again",
+                parent=parent,
+            )
+            return
+        except Exception as e:
+            messagebox.showerror(
+                "Cannot Read Album Data",
+                f"Error reading album hierarchy file:\n\n{e}\n\n"
+                "To fix this:\n"
+                "1. Check that the file exists and is readable\n"
+                "2. Download the album hierarchy again:\n"
+                "   - Click 'Download Album Hierarchy' in the main window\n"
+                "3. Try adding a new album again",
+                parent=parent,
+            )
+            return
 
     # ── Dialog ───────────────────────────────────────────────────────────────
     dlg = tk.Toplevel(parent)
