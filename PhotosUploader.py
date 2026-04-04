@@ -100,10 +100,9 @@ EXIF_TAG_NAMES = {
 
 CUSTOM_FIELDS = [
     ('output_filename', 'Output Filename'),
-    ('caption', 'Caption'),
     ('photo_source', 'Photographer/Source'),
     ('date_of_photo', 'Date of Photo'),
-    ('comments', 'Comments'),
+    ('comments', 'Caption'),
     ('tags', 'Tags (comma-separated)'),
 ]
 
@@ -1044,31 +1043,43 @@ class PhotosUploader:
             return {}
 
     def _write_exif_fields(self, path: str):
-        """Write Comments → ImageDescription, Photographer/Source → Artist,
-        and Output Filename → DocumentName into the file's EXIF block.
+        """Write custom field values into the file's EXIF block before upload.
 
-        Only writes tags that have a non-empty value in the custom fields.
+        Fields written:
+          Comments         → ImageDescription (0x010E)
+          Photographer/Source → Artist        (0x013B)
+          Output Filename  → DocumentName     (0x010D)
+          Date of Photo    → DateTimeOriginal (0x9003) in YYYY:MM:DD HH:MM:SS format
+
+        Only writes tags that have a non-empty value. Date must be parseable.
         Silently skips if piexif is unavailable or the write fails.
-        DocumentName (0x010D) is the closest standard EXIF tag to "Filename".
         """
         if not PIEXIF_AVAILABLE:
             return
         assert piexif is not None
-        custom = self.custom_data.get(path, {})
+        custom   = self.custom_data.get(path, {})
         comments = custom.get('comments', '').strip()
         source   = custom.get('photo_source', '').strip()
         out_name = custom.get('output_filename', '').strip()
-        if not any([comments, source, out_name]):
+        raw_date = custom.get('date_of_photo', '').strip()
+        parsed_date = self._parse_date(raw_date) if raw_date else None
+        if not any([comments, source, out_name, parsed_date]):
             return
         try:
             exif_dict = piexif.load(path)
-            ifd = exif_dict.setdefault('0th', {})
+            ifd0 = exif_dict.setdefault('0th', {})
+            exif = exif_dict.setdefault('Exif', {})
             if comments:
-                ifd[piexif.ImageIFD.ImageDescription] = comments.encode('utf-8')
+                ifd0[piexif.ImageIFD.ImageDescription] = comments.encode('utf-8')
             if source:
-                ifd[piexif.ImageIFD.Artist] = source.encode('utf-8')
+                ifd0[piexif.ImageIFD.Artist] = source.encode('utf-8')
             if out_name:
-                ifd[piexif.ImageIFD.DocumentName] = out_name.encode('utf-8')
+                ifd0[piexif.ImageIFD.DocumentName] = out_name.encode('utf-8')
+            if parsed_date:
+                # EXIF datetime format: "YYYY:MM:DD HH:MM:SS"
+                exif_date = parsed_date.strftime('%Y:%m:%d %H:%M:%S').encode('utf-8')
+                exif[piexif.ExifIFD.DateTimeOriginal] = exif_date
+                exif[piexif.ExifIFD.DateTimeDigitized] = exif_date
             piexif.insert(piexif.dump(exif_dict), path)
         except Exception as e:
             self.set_status(f"Warning: could not write EXIF to {os.path.basename(path)}: {e}")
@@ -1178,28 +1189,32 @@ class PhotosUploader:
         self._update_counts()
         self.set_status(f"Queued for upload: {os.path.basename(path)}")
 
-        # Advance to the next photo, or clear the viewer if the queue is empty
+        # Always clear the viewer first, then load the next photo if there is one
+        self._clear_viewer()
         if next_idx is not None:
             self.input_list.selection_clear(0, tk.END)
             self.input_list.selection_set(next_idx)
             self.input_list.see(next_idx)
             self.current_photo = self.input_paths[next_idx]
             self._load_photo(self.current_photo)
-        else:
-            self.current_photo = None
-            self.photo_image = None
-            self.photo_label_var.set("No photo selected")
-            self.photo_dim_var.set("")
-            self.path_var.set("")
-            self.canvas.delete('all')
-            self.exif_tree.delete(*self.exif_tree.get_children())
-            for widget in self.custom_vars.values():
-                if isinstance(widget, tk.Text):
-                    widget.delete('1.0', tk.END)
-                else:
-                    widget.set('')
-            self._update_button_states()
 
+
+    def _clear_viewer(self):
+        """Reset the photo viewer, EXIF tree, and all custom fields to empty."""
+        self.current_photo = None
+        self.photo_image   = None
+        self.photo_label_var.set("No photo selected")
+        self.photo_dim_var.set("")
+        self.path_var.set("")
+        self.canvas.delete('all')
+        self._exif_data = {}
+        self.exif_tree.delete(*self.exif_tree.get_children())
+        for widget in self.custom_vars.values():
+            if isinstance(widget, tk.Text):
+                widget.delete('1.0', tk.END)
+            else:
+                widget.set('')
+        self._update_button_states()
 
     # -----------------------------------------------------------------------
     # Utilities
@@ -1270,7 +1285,6 @@ class PhotosUploader:
         author   = custom.get('photo_source', '').strip()
         comment  = custom.get('comments', '').strip()
         tags     = custom.get('tags', '').strip()
-        date_creation = custom.get('date_of_photo', '').strip()
 
         self.set_status(f"Uploading {filename}…")
         self.root.update_idletasks()
@@ -1285,7 +1299,7 @@ class PhotosUploader:
                 result = client.upload_image(
                     path, album_id,
                     name=name, author=author, comment=comment,
-                    tags=tags, date_creation=date_creation,
+                    tags=tags,
                 )
                 image_id = int(result.get('image_id', 0))
                 self.root.after(0, lambda: finish_ok(image_id))

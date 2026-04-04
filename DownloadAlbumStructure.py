@@ -149,6 +149,7 @@ class PiwigoClient:
         data = {
             'method':   'pwg.images.addSimple',
             'category': str(category_id),
+            'level':    '0',   # 0 = public; omitting this can leave the image hidden
         }
         if name:
             data['name'] = name
@@ -174,10 +175,17 @@ class PiwigoClient:
         try:
             resp = r.json()
         except ValueError:
-            raise RuntimeError(f"Server did not return valid JSON for upload of {filename}")
+            preview = r.text[:400].strip() if r.text else "(empty)"
+            raise RuntimeError(
+                f"Server did not return valid JSON for upload of {filename}.\n"
+                f"HTTP status: {r.status_code}\n"
+                f"Response preview:\n{preview}"
+            )
         if resp.get('stat') != 'ok':
             raise RuntimeError(resp.get('message', 'Unknown Piwigo upload error'))
-        return resp.get('result', {})
+        result = resp.get('result', {})
+        print(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url','?')}")
+        return result
 
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
