@@ -20,6 +20,7 @@ Public API
         uploading.
 """
 
+import sys
 import json
 import time
 import threading
@@ -31,9 +32,11 @@ from pathlib import Path
 try:
     import requests
     import urllib3
-    REQUESTS_AVAILABLE = True
 except ImportError:
-    REQUESTS_AVAILABLE = False
+    sys.exit(
+        "ERROR: The 'requests' library is required but not installed.\n"
+        "Run:  pip install requests"
+    )
 
 # ---------------------------------------------------------------------------
 # File paths
@@ -347,13 +350,6 @@ def run(parent: tk.Widget, set_status_cb):
     Opens a modal progress dialog on *parent*.  Calls set_status_cb(str)
     to update the caller's status bar at each step and on completion.
     """
-    if not REQUESTS_AVAILABLE:
-        messagebox.showerror(
-            "Missing dependency",
-            "The 'requests' library is required.\nRun: pip install requests",
-            parent=parent,
-        )
-        return
 
     try:
         params = load_params()
@@ -438,13 +434,6 @@ def add_album(parent: tk.Widget, set_status_cb):
     Create.  The album is added via the API and AlbumHierarchy.json is
     refreshed afterwards.
     """
-    if not REQUESTS_AVAILABLE:
-        messagebox.showerror(
-            "Missing dependency",
-            "The 'requests' library is required.\nRun: pip install requests",
-            parent=parent,
-        )
-        return
 
     try:
         params = load_params()
@@ -659,13 +648,6 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
     on_select_cb(album_id: int, fullname: str) is called when the user
     confirms a selection.
     """
-    if not REQUESTS_AVAILABLE:
-        messagebox.showerror(
-            "Missing dependency",
-            "The 'requests' library is required.\nRun: pip install requests",
-            parent=parent,
-        )
-        return
 
     def open_picker():
         try:
@@ -867,13 +849,6 @@ def download_file_index(parent: tk.Widget, set_status_cb):
     If AlbumHierarchy.json is missing or stale the hierarchy is refreshed
     first (re-uses the same credentials and session).
     """
-    if not REQUESTS_AVAILABLE:
-        messagebox.showerror(
-            "Missing dependency",
-            "The 'requests' library is required.\nRun: pip install requests",
-            parent=parent,
-        )
-        return
 
     try:
         params = load_params()
