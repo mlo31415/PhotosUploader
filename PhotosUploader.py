@@ -10,6 +10,7 @@ import json
 import shutil
 import tempfile
 import threading
+import logging
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk, filedialog, messagebox
@@ -40,6 +41,16 @@ except ImportError:
     print("WARNING: tkinterdnd2 not installed. Run: pip install tkinterdnd2")
 
 import DownloadAlbumStructure
+
+# ---------------------------------------------------------------------------
+# Logging configuration
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # State persistence
@@ -1215,7 +1226,7 @@ class PhotosUploader:
         # Create a temp copy without EXIF to avoid Piwigo errors
         temp_path = self._create_temp_copy_without_exif(path)
         upload_path = temp_path if temp_path else path
-        print(f"[upload] PhotosUploader: album_id={album_id}, album={album}, path={upload_path}")
+        logger.debug(f"Uploading to Piwigo: album_id={album_id}, album={album}, path={upload_path}")
 
         def worker():
             client = DownloadAlbumStructure.PiwigoClient(
