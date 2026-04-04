@@ -80,8 +80,9 @@ def load_params() -> dict[str, Any]:
             '  "password": "your-password-here",\n'
             '  "verify_ssl": false\n'
             '}\n\n'
-            'Optional: Add "path" field to store data files elsewhere (defaults to "."):\n'
-            '  "path": "/path/to/data/directory"'
+            'Optional fields:\n'
+            '  "path": "/path/to/data/directory"  (defaults to ".")\n'
+            '  "rate_limit_calls_per_secondond": 2.0  (API calls per second, defaults to 2.0)'
         )
     with open(PARAMS_FILE) as f:
         params = json.load(f)
@@ -99,7 +100,16 @@ def load_params() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 class PiwigoClient:
     def __init__(self, base_url: str, username: str, password: str,
-                 verify_ssl: bool = True):
+                 verify_ssl: bool = True, rate_limit_calls_per_second: float = 2.0):
+        """Initialize Piwigo client.
+
+        Args:
+            base_url: Piwigo server URL
+            username: Piwigo username
+            password: Piwigo password
+            verify_ssl: Whether to verify HTTPS certificates
+            rate_limit_calls_per_second: Maximum API calls per second (default 2.0)
+        """
         url = base_url.strip().rstrip("/")
         if url.startswith("http://"):
             url = "https://" + url[7:]
@@ -110,9 +120,22 @@ class PiwigoClient:
         self.session    = requests.Session()
         self.session.verify = verify_ssl
         self._verify_ssl = verify_ssl
+        self.rate_limit_calls_per_second = max(0.1, float(rate_limit_calls_per_second))  # at least 0.1 calls/sec
+        self._last_api_call_time = 0
+
+    def _apply_rate_limit(self):
+        """Enforce rate limiting by sleeping if necessary."""
+        if self.rate_limit_calls_per_second <= 0:
+            return
+        min_interval = 1.0 / self.rate_limit_calls_per_second
+        elapsed = time.time() - self._last_api_call_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        self._last_api_call_time = time.time()
 
     def _call(self, method: str, params: dict = None) -> dict:
         """Call Piwigo API with retry logic on timeout."""
+        self._apply_rate_limit()
         max_retries = 3
         retry_count = 0
         last_error = None
@@ -197,6 +220,7 @@ class PiwigoClient:
 
         Returns the API result dict which contains 'image_id' on success.
         """
+        self._apply_rate_limit()
         filename = path.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
         print(f"[upload] uploading {filename} to category_id {category_id}")
         data = {
@@ -480,6 +504,7 @@ def run(parent: tk.Widget, set_status_cb):
             params["username"],
             params["password"],
             verify_ssl=params.get("verify_ssl", True),
+            rate_limit_calls_per_second=params.get("rate_limit_calls_per_second", 2.0),
         )
         try:
             parent.after(0, lambda: set_step("Logging in…"))
@@ -826,6 +851,7 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
             params["username"],
             params["password"],
             verify_ssl=params.get("verify_ssl", True),
+            rate_limit_calls_per_second=params.get("rate_limit_calls_per_second", 2.0),
         )
         try:
             client.login(params["username"], params["password"])
@@ -1022,6 +1048,7 @@ def download_file_index(parent: tk.Widget, set_status_cb):
             params["username"],
             params["password"],
             verify_ssl=params.get("verify_ssl", True),
+            rate_limit_calls_per_second=params.get("rate_limit_calls_per_second", 2.0),
         )
         try:
             parent.after(0, lambda: set_step("Logging in…"))
