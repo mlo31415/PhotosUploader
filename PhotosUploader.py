@@ -858,22 +858,97 @@ class PhotosUploader:
         except Exception as e:
             self.exif_tree.insert('', "end", values=('Error reading EXIF', str(e)))
 
-    # Date formats accepted when the user types a date
-    _DATE_FORMATS = [
-        '%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%m-%d-%Y',
-        '%d/%m/%Y', '%d-%m-%Y', '%B %d, %Y', '%b %d, %Y',
-        '%Y:%m:%d %H:%M:%S',  # EXIF native full datetime
-        '%Y:%m:%d',           # EXIF date only
-    ]
+    _MONTH_MAP: dict[str, int] = {
+        'jan': 1, 'january': 1,
+        'feb': 2, 'february': 2,
+        'mar': 3, 'march': 3,
+        'apr': 4, 'april': 4,
+        'may': 5,
+        'jun': 6, 'june': 6,
+        'jul': 7, 'july': 7,
+        'aug': 8, 'august': 8,
+        'sep': 9, 'sept': 9, 'september': 9,
+        'oct': 10, 'october': 10,
+        'nov': 11, 'november': 11,
+        'dec': 12, 'december': 12,
+    }
+
+    @staticmethod
+    def _expand_year(yy: int) -> int:
+        """00–30 → 1900+yy (historical photos); 31–99 → 2000+yy."""
+        return (1900 if yy <= 30 else 2000) + yy
 
     def _parse_date(self, text: str) -> datetime | None:
-        """Return a datetime if *text* matches any known date format, else None."""
-        text = text.strip()
-        for fmt in self._DATE_FORMATS:
+        """Parse a user-supplied date string.  Returns a datetime or None.
+
+        Accepted formats (mm/dd both accept 1 or 2 digits; year accepts
+        4 digits or 2 digits with century inferred by _expand_year):
+          mm/dd/yyyy   mm/dd/yy   (dd/mm tried as fallback)
+          dd month yyyy           (e.g. 15 Dec 2023)
+          month dd, yyyy          (e.g. December 15, 2023)
+          mm/yyyy   mm/yy         (day defaults to 1)
+          month yyyy              (e.g. Dec 2023 — day defaults to 1)
+          yyyy                    (month/day default to 1)
+          EXIF: YYYY:MM:DD HH:MM:SS  and  YYYY:MM:DD
+        """
+        text = re.sub(r'\s+', ' ', text.strip())
+        if not text:
+            return None
+
+        def yr(s: str) -> int:
+            v = int(s)
+            return v if len(s) == 4 else self._expand_year(v)
+
+        def make(year: int, month: int, day: int = 1) -> datetime | None:
+            try:
+                return datetime(year, month, day)
+            except ValueError:
+                return None
+
+        # EXIF native: YYYY:MM:DD HH:MM:SS  or  YYYY:MM:DD
+        for fmt in ('%Y:%m:%d %H:%M:%S', '%Y:%m:%d'):
             try:
                 return datetime.strptime(text, fmt)
             except ValueError:
-                continue
+                pass
+
+        # mm/dd/yyyy  or  mm-dd-yyyy  (with optional 2-digit year)
+        m = re.fullmatch(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4}|\d{2})', text)
+        if m:
+            a, b, y = int(m.group(1)), int(m.group(2)), yr(m.group(3))
+            return make(y, a, b) or make(y, b, a)  # mm/dd then dd/mm fallback
+
+        # mm/yyyy  or  mm/yy  (month + year, no day)
+        m = re.fullmatch(r'(\d{1,2})[/\-](\d{4}|\d{2})', text)
+        if m:
+            return make(yr(m.group(2)), int(m.group(1)))
+
+        # yyyy alone
+        m = re.fullmatch(r'(\d{4})', text)
+        if m:
+            return make(int(m.group(1)), 1)
+
+        # dd month yyyy  — e.g. "15 December 2023" or "15 Dec 23"
+        m = re.fullmatch(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4}|\d{2})', text)
+        if m:
+            month = self._MONTH_MAP.get(m.group(2).lower())
+            if month:
+                return make(yr(m.group(3)), month, int(m.group(1)))
+
+        # month dd, yyyy  — e.g. "December 15, 2023" or "Dec 15 23"
+        m = re.fullmatch(r'([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4}|\d{2})', text)
+        if m:
+            month = self._MONTH_MAP.get(m.group(1).lower())
+            if month:
+                return make(yr(m.group(3)), month, int(m.group(2)))
+
+        # month yyyy  — e.g. "December 2023" or "Dec 23"
+        m = re.fullmatch(r'([A-Za-z]+)\s+(\d{4}|\d{2})', text)
+        if m:
+            month = self._MONTH_MAP.get(m.group(1).lower())
+            if month:
+                return make(yr(m.group(2)), month)
+
         return None
 
     def _load_iptc(self, path: str):
