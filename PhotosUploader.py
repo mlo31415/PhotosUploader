@@ -168,6 +168,7 @@ class PhotosUploader:
         self._cached_image_path = None      # path matching _cached_image
         self.custom_data = {}       # path -> dict of custom field values
         self._field_links = []      # list of link descriptors; see _register_field_link
+        self.persist_vars = {}      # {field_key: BooleanVar} for persist checkboxes
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -179,6 +180,7 @@ class PhotosUploader:
 
         self._build_ui()
         self._bind_shortcuts()
+        self.custom_data = dict(self.state_data.get("custom_data", {}))
         self.root.update_idletasks()
         self._restore_geometry()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -384,21 +386,35 @@ class PhotosUploader:
         custom_frame = ttk.LabelFrame(hpane, text="Custom Fields", padding=6)
         hpane.add(custom_frame, weight=1)
 
+        # "Persist" label above the checkbox column
+        ttk.Label(custom_frame, text="Persist", anchor="center").grid(
+            row=0, column=1, sticky="ew", pady=2)
+
         self.custom_vars = {}
+        self.persist_vars = {}  # Track which fields should persist across photos
         for i, (key, label) in enumerate(CUSTOM_FIELDS):
+            row = i + 1  # Offset by 1 to account for header row
             ttk.Label(custom_frame, text=label + ":", width=22, anchor="e").grid(
-                row=i, column=0, sticky="e", pady=2, padx=(0, 4))
+                row=row, column=0, sticky="e", pady=2, padx=(0, 4))
+
+            # Checkbox for persist (not shown for output_filename)
+            persist_var = tk.BooleanVar(value=False)
+            if key != 'output_filename':
+                ttk.Checkbutton(custom_frame, variable=persist_var).grid(
+                    row=row, column=1, sticky="w", padx=4, pady=2)
+            self.persist_vars[key] = persist_var
+
             if key == 'comments':
                 txt = tk.Text(custom_frame, height=3, width=40, wrap="word",
                               font=('TkDefaultFont', 9))
-                txt.grid(row=i, column=1, sticky="ew", pady=2)
+                txt.grid(row=row, column=2, sticky="ew", pady=2)
                 self.custom_vars[key] = txt
             else:
                 var = tk.StringVar()
                 entry = ttk.Entry(custom_frame, textvariable=var, width=40)
-                entry.grid(row=i, column=1, sticky="ew", pady=2)
+                entry.grid(row=row, column=2, sticky="ew", pady=2)
                 self.custom_vars[key] = var
-        custom_frame.columnconfigure(1, weight=1)
+        custom_frame.columnconfigure(2, weight=1)
 
         # ── Bidirectional field links (custom field ↔ EXIF ↔ IPTC) ──────────
         self._register_field_link(
@@ -660,12 +676,12 @@ class PhotosUploader:
             self.input_list.selection_clear(0, "end")
             self.input_list.selection_set(next_idx)
             self.input_list.see(next_idx)
-            self._save_current_custom_fields()
             self.current_photo = self.input_paths[next_idx]
             self._load_photo(self.current_photo)
         else:
             self._clear_viewer()
             self.set_status("All photos have been skipped.")
+        self._persist_state()
 
     def _revert_photo(self):
         """Create a new, unchanged copy of the photo (prefer original from input queue).
@@ -730,6 +746,10 @@ class PhotosUploader:
         self._load_exif(path)
         self._load_iptc(path)
         self._load_custom_fields(path)
+        # Snapshot field values (IPTC-seeded or previously saved) so they
+        # survive a restart even if the user never navigates away.
+        if path not in self.custom_data:
+            self._save_current_custom_fields()
         self.path_var.set(path)
         self._update_button_states()
 
@@ -774,16 +794,15 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     def _register_field_link(self, custom_key: str, exif_key: str | None,
                              iptc_tag: tuple, validate_fn=None):
-        """Register a bidirectional link between a custom StringVar field,
-        an EXIF display-name key, and an IPTC tag tuple (e.g. (2, 80)).
+        """Register a link between a custom StringVar field, an EXIF
+        display-name key, and an IPTC tag tuple (e.g. (2, 80)).
 
-        validate_fn(value: str) -> truthy  — called on non-empty values typed
-        into the custom field or the EXIF editor.  If it returns falsy the
-        update is silently skipped.  Pass None to accept any value.
+        Changes to the custom field propagate into _exif_data and refresh
+        the metadata tree.  validate_fn(value: str) -> truthy is called on
+        non-empty values; falsy result suppresses the update.
 
         Must be called after self.custom_vars has been built.
-        This method sets up the custom-field → EXIF trace and stores a
-        descriptor used by _load_iptc and _apply_exif_edit.
+        Descriptor is also used by _load_iptc for initial population.
         """
         link = {
             'custom_key':  custom_key,
@@ -891,16 +910,20 @@ class PhotosUploader:
             if not value and link['exif_key'] is not None:
                 value = self._exif_data.get(link['exif_key'], '')
 
+            # Keep _exif_data in sync so the tree always shows the row
+            if link['exif_key'] is not None:
+                self._exif_data[link['exif_key']] = value
+
+            # Don't overwrite a persisted field
+            if self.persist_vars[link['custom_key']].get():
+                continue
+
             # Populate the custom field under the reentrancy guard
             link['syncing'] = True
             try:
                 self.custom_vars[link['custom_key']].set(value)
             finally:
                 link['syncing'] = False
-
-            # Keep _exif_data in sync so the tree always shows the row
-            if link['exif_key'] is not None:
-                self._exif_data[link['exif_key']] = value
 
         self._refresh_exif_tree()
 
@@ -933,17 +956,6 @@ class PhotosUploader:
         new_val = self.exif_edit_var.get()
         if vals:
             self._exif_data[vals[0]] = new_val
-            # Sync back to any linked custom field
-            for link in self._field_links:
-                if vals[0] == link['exif_key']:
-                    validate = link['validate_fn']
-                    if not new_val or validate is None or validate(new_val):
-                        link['syncing'] = True
-                        try:
-                            self.custom_vars[link['custom_key']].set(new_val)
-                        finally:
-                            link['syncing'] = False
-                    break
         self._refresh_exif_tree(reselect_key=vals[0] if vals else "")
         self.set_status(f"EXIF field '{vals[0]}' updated (pending save).")
 
@@ -951,18 +963,27 @@ class PhotosUploader:
     # Custom fields
     # -----------------------------------------------------------------------
     def _load_custom_fields(self, path: str):
-        data = self.custom_data.get(path, {})
+        data = self.custom_data.get(path)
         for key, widget in self.custom_vars.items():
+            # Never overwrite a persisted field
+            if self.persist_vars[key].get():
+                continue
+            if data is None:
+                # No saved data — leave IPTC-populated values in place
+                continue
+
             val = data.get(key, '')
             if isinstance(widget, tk.Text):
                 widget.delete('1.0', "end")
                 widget.insert('1.0', val)
             else:
                 widget.set(val)
+
         # Pre-fill output filename with the current filename if not already set
-        out_var = self.custom_vars['output_filename']
-        if not out_var.get().strip():
-            out_var.set(os.path.basename(path))
+        if not self.persist_vars['output_filename'].get():
+            out_var = self.custom_vars['output_filename']
+            if not out_var.get().strip():
+                out_var.set(os.path.basename(path))
 
     def _save_current_custom_fields(self):
         if not self.current_photo:
@@ -1313,15 +1334,20 @@ class PhotosUploader:
             min_w, min_h = self.root.minsize()
             self.root.geometry(f"{max(w, min_w)}x{max(h, min_h)}+100+100")
 
+    def _persist_state(self):
+        """Update state_data with current runtime state and write to disk."""
+        album = self.upload_album_var.get()
+        self.state_data["upload_album"]    = album if album != "(none)" else ""
+        self.state_data["upload_album_id"] = self.upload_album_id
+        self.state_data["custom_data"]     = dict(self.custom_data)
+        save_state(self.state_data)
+
     def _on_close(self):
         self.root.update_idletasks()
         x, y = self.root.winfo_x(), self.root.winfo_y()
         w, h = self.root.winfo_width(), self.root.winfo_height()
         self.state_data["geometry"] = f"{w}x{h}+{x}+{y}"
-        album = self.upload_album_var.get()
-        self.state_data["upload_album"]    = album if album != "(none)" else ""
-        self.state_data["upload_album_id"] = self.upload_album_id
-        save_state(self.state_data)
+        self._persist_state()
         self.root.destroy()
 
     def _bind_shortcuts(self):
