@@ -515,7 +515,7 @@ class PhotosUploader:
         self.set_status(f"Added {added} image(s) to input queue.")
 
 
-    def _add_folder(self, folder: str, batch_state: dict[str, str] | None = None) -> int:
+    def _add_folder(self, folder: str, batch_state: dict[str, str] | None = {}) -> int:
         if batch_state is None:
             batch_state = {}
         added = 0

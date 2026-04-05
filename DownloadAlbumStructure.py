@@ -185,6 +185,7 @@ class PiwigoClient:
                         f"  4. Contact your server administrator if the problem persists\n\n"
                         f"Details: {str(last_error)}"
                     )
+        raise RuntimeError(f"API call '{method}' failed: {last_error}")
 
     def login(self, username: str, password: str):
         self._call("pwg.session.login", {
