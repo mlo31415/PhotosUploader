@@ -293,6 +293,7 @@ class PiwigoClient:
                         f"  4. Contact your server administrator if the problem persists\n\n"
                         f"Details: {str(last_error)}"
                     )
+        raise RuntimeError(f"Upload of '{filename}' failed: {last_error}")
 
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
