@@ -203,8 +203,7 @@ class PhotosUploader:
         main_pane.pack(side="top", fill="both", expand=True, padx=4, pady=4)
 
         # LEFT: Input queue
-        left_frame = self._build_queue_panel(main_pane, "Input Queue",
-                                             is_input=True)
+        left_frame = self._build_queue_panel(main_pane, "Input Queue")
         main_pane.add(left_frame, weight=1)
 
         # CENTER: Photo viewer + fields
@@ -217,7 +216,7 @@ class PhotosUploader:
         ttk.Label(status_bar, textvariable=self.status_var, anchor="w").pack(
             side="left", padx=6, pady=2)
 
-    def _build_queue_panel(self, parent, title: str, is_input: bool) -> ttk.Frame:
+    def _build_queue_panel(self, parent, title: str) -> ttk.Frame:
         frame = ttk.LabelFrame(parent, text=title, padding=4)
 
         # Buttons
