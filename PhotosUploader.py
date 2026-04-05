@@ -396,12 +396,12 @@ class PhotosUploader:
             ttk.Label(custom_frame, text=label + ":", width=22, anchor="e").grid(
                 row=row, column=0, sticky="e", pady=2, padx=(0, 4))
 
-            # Checkbox for persist (not shown for output_filename)
-            persist_var = tk.BooleanVar(value=False)
+            # Checkbox for persist (output_filename has no persist option)
             if key != 'output_filename':
+                persist_var = tk.BooleanVar(value=False)
                 ttk.Checkbutton(custom_frame, variable=persist_var).grid(
                     row=row, column=1, sticky="w", padx=4, pady=2)
-            self.persist_vars[key] = persist_var
+                self.persist_vars[key] = persist_var
 
             if key == 'comments':
                 txt = tk.Text(custom_frame, height=3, width=40, wrap="word",
@@ -1039,6 +1039,8 @@ class PhotosUploader:
     def _load_custom_fields(self, path: str):
         data = self.custom_data.get(path)
         for key, widget in self.custom_vars.items():
+            if key == 'output_filename':
+                continue  # handled separately below
             # Never overwrite a persisted field
             if self.persist_vars[key].get():
                 continue
@@ -1053,11 +1055,10 @@ class PhotosUploader:
             else:
                 widget.set(val)
 
-        # Pre-fill output filename with the current filename if not already set
-        if not self.persist_vars['output_filename'].get():
-            out_var = self.custom_vars['output_filename']
-            if not out_var.get().strip():
-                out_var.set(os.path.basename(path))
+        # Always reset output filename to the current photo's basename,
+        # unless this photo has a saved custom value.
+        if data is None or 'output_filename' not in data:
+            self.custom_vars['output_filename'].set(os.path.basename(path))
 
     def _save_current_custom_fields(self):
         if not self.current_photo:
