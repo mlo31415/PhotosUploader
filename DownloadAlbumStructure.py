@@ -223,7 +223,7 @@ class PiwigoClient:
         """
         self._apply_rate_limit()
         filename = path.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
-        print(f"[upload] uploading {filename} to category_id {category_id}")
+        logger.info(f"[upload] uploading {filename} to category_id {category_id}")
         data = {
             'method':   'pwg.images.addSimple',
             'category': str(category_id),
@@ -266,10 +266,14 @@ class PiwigoClient:
                         f"HTTP status: {r.status_code}\n"
                         f"Response preview:\n{preview}"
                     )
-                if resp.get('stat') != 'ok':
-                    raise RuntimeError(resp.get('message', 'Unknown Piwigo upload error'))
+                stat = resp.get('stat')
+                message = resp.get('message', '')
+                if message:
+                    logger.info(f"[upload] server message: {message}")
+                if stat != 'ok':
+                    raise RuntimeError(message or 'Unknown Piwigo upload error')
                 result = resp.get('result', {})
-                print(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url','?')}")
+                logger.info(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url', '?')}")
                 return result
             except (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout) as e:
                 retry_count += 1

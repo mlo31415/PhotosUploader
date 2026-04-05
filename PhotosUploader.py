@@ -228,6 +228,8 @@ class PhotosUploader:
                                            command=self.remove_selected_input,
                                            state="disabled")
         self.input_remove_btn.pack(side="left", padx=2)
+        ttk.Button(btn_row, text="Remove All",
+                   command=self.remove_all_input).pack(side="left", padx=2)
         ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side="left")
         ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side="left")
 
@@ -613,9 +615,28 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     def remove_selected_input(self):
         sel = list(self.input_list.curselection())
+        if not sel:
+            return
+        first_removed = sel[0]
         for i in reversed(sel):
             self.input_paths.pop(i)
             self.input_list.delete(i)
+        self._update_counts()
+        if self.input_paths:
+            next_idx = min(first_removed, len(self.input_paths) - 1)
+            self.input_list.selection_clear(0, "end")
+            self.input_list.selection_set(next_idx)
+            self.input_list.see(next_idx)
+            self._save_current_custom_fields()
+            self.current_photo = self.input_paths[next_idx]
+            self._load_photo(self.current_photo)
+        else:
+            self._clear_viewer()
+
+    def remove_all_input(self):
+        self.input_paths.clear()
+        self.input_list.delete(0, "end")
+        self._clear_viewer()
         self._update_counts()
 
     def _move_item(self, listbox, direction):
@@ -1326,6 +1347,32 @@ class PhotosUploader:
         upload_path = temp_path if temp_path else path
         logger.debug(f"Uploading to Piwigo: album_id={album_id}, album={album}, path={upload_path}")
 
+        # Progress dialog
+        progress_dlg = tk.Toplevel(self.root)
+        progress_dlg.title("Uploading…")
+        progress_dlg.resizable(False, False)
+        progress_dlg.grab_set()
+        progress_dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # prevent close
+        ttk.Label(progress_dlg, text=f"Uploading  {output_filename}",
+                  padding=(16, 12, 16, 4)).pack()
+        ttk.Label(progress_dlg, text=f"to  '{album}'",
+                  padding=(16, 0, 16, 8)).pack()
+        pbar = ttk.Progressbar(progress_dlg, mode='indeterminate', length=320)
+        pbar.pack(padx=16, pady=(0, 16))
+        pbar.start(12)
+        # Centre over main window
+        self.root.update_idletasks()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        progress_dlg.update_idletasks()
+        dw, dh = progress_dlg.winfo_width(), progress_dlg.winfo_height()
+        progress_dlg.geometry(f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 2}")
+
+        def close_progress():
+            pbar.stop()
+            progress_dlg.grab_release()
+            progress_dlg.destroy()
+
         def worker():
             client = DownloadAlbumStructure.PiwigoClient(
                 params['url'], params['username'], params['password'],
@@ -1347,6 +1394,7 @@ class PhotosUploader:
                 client.logout()
 
         def finish_ok(image_id):
+            close_progress()
             # Clean up temp copy if one was created
             if temp_path and os.path.exists(temp_path):
                 try:
@@ -1366,6 +1414,7 @@ class PhotosUploader:
                 f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
 
         def finish_err(err):
+            close_progress()
             # Clean up temp copy if one was created
             if temp_path and os.path.exists(temp_path):
                 try:
