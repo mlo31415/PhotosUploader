@@ -299,6 +299,16 @@ class PiwigoClient:
                     )
         raise RuntimeError(f"Upload of '{filename}' failed: {last_error}")
 
+    def sync_metadata(self, image_id: int) -> None:
+        """Ask Piwigo to re-read EXIF/IPTC metadata for an image from its file."""
+        logger.info(f"[sync] pwg.images.syncMetadata image_id={image_id}")
+        self._call("pwg.images.syncMetadata", {"image_id": image_id})
+
+    def refresh_representative(self, category_id: int) -> None:
+        """Refresh the representative thumbnail for an album."""
+        logger.info(f"[sync] pwg.categories.refreshRepresentative category_id={category_id}")
+        self._call("pwg.categories.refreshRepresentative", {"cat_id": category_id})
+
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
 

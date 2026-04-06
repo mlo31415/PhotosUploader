@@ -1074,6 +1074,10 @@ class PhotosUploader:
     # Custom fields
     # -----------------------------------------------------------------------
     def _load_custom_fields(self, path: str):
+        # Keys populated from IPTC on every load — don't clear these when
+        # there is no saved data, as _load_iptc has already set them.
+        iptc_keys = {link['custom_key'] for link in self._field_links}
+
         data = self.custom_data.get(path)
         for key, widget in self.custom_vars.items():
             if key == 'output_filename':
@@ -1082,7 +1086,13 @@ class PhotosUploader:
             if self.persist_vars[key].get():
                 continue
             if data is None:
-                # No saved data — leave IPTC-populated values in place
+                # No saved data: clear fields that have no IPTC source so
+                # they don't retain values from the previous photo.
+                if key not in iptc_keys:
+                    if isinstance(widget, tk.Text):
+                        widget.delete('1.0', "end")
+                    else:
+                        widget.set('')
                 continue
 
             val = data.get(key, '')
@@ -1374,8 +1384,11 @@ class PhotosUploader:
         ttk.Label(progress_dlg, text=f"to  '{album}'",
                   padding=(16, 0, 16, 8)).pack()
         pbar = ttk.Progressbar(progress_dlg, mode='indeterminate', length=320)
-        pbar.pack(padx=16, pady=(0, 16))
+        pbar.pack(padx=16, pady=(0, 8))
         pbar.start(12)
+        progress_stage_var = tk.StringVar(value="Connecting…")
+        ttk.Label(progress_dlg, textvariable=progress_stage_var,
+                  foreground="gray", padding=(16, 0, 16, 12)).pack()
         # Centre over main window
         self.root.update_idletasks()
         rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
@@ -1383,6 +1396,9 @@ class PhotosUploader:
         progress_dlg.update_idletasks()
         dw, dh = progress_dlg.winfo_width(), progress_dlg.winfo_height()
         progress_dlg.geometry(f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 2}")
+
+        def set_stage(msg: str):
+            self.root.after(0, lambda: progress_stage_var.set(msg))
 
         def close_progress():
             pbar.stop()
@@ -1395,13 +1411,26 @@ class PhotosUploader:
                 verify_ssl=params.get('verify_ssl', True),
             )
             try:
+                set_stage("Logging in…")
                 client.login(params['username'], params['password'])
+                set_stage(f"Uploading {output_filename}…")
                 result = client.upload_image(
                     upload_path, album_id,
                     name=output_filename, author=author, comment=comment,
                     tags=tags, date_creation=date_creation,
                 )
                 image_id = int(result.get('image_id', 0))
+                set_stage(f"Syncing metadata (pwg.images.syncMetadata)…")
+                try:
+                    client.sync_metadata(image_id)
+                except Exception as e:
+                    logger.warning(f"syncMetadata failed (non-fatal): {e}")
+                set_stage(f"Refreshing album thumbnail (pwg.categories.refreshRepresentative)…")
+                try:
+                    client.refresh_representative(album_id)
+                except Exception as e:
+                    logger.warning(f"refreshRepresentative failed (non-fatal): {e}")
+                set_stage("Done.")
                 self.root.after(0, lambda: finish_ok(image_id))
             except Exception as exc:
                 err = str(exc)
