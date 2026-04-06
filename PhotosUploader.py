@@ -179,6 +179,9 @@ class PhotosUploader:
             self.upload_album_id = int(self.state_data["upload_album_id"])
 
         self._build_ui()
+        self._validate_caption_field()         # start pink since caption is empty
+        self._validate_date_field()            # start pink since date is empty
+        self._validate_output_filename_field() # start pink since filename is empty
         self._bind_shortcuts()
         self.custom_data = dict(self.state_data.get("custom_data", {}))
         self.root.update_idletasks()
@@ -418,6 +421,9 @@ class PhotosUploader:
                 if key == 'date_of_photo':
                     entry = tk.Entry(custom_frame, textvariable=var, width=40)
                     self.date_entry = entry
+                elif key == 'output_filename':
+                    entry = tk.Entry(custom_frame, textvariable=var, width=40)
+                    self.output_filename_entry = entry
                 else:
                     entry = ttk.Entry(custom_frame, textvariable=var, width=40)
                 entry.grid(row=row, column=2, sticky="ew", pady=2)
@@ -440,6 +446,9 @@ class PhotosUploader:
         self.custom_vars['date_of_photo'].trace_add(
             'write', lambda *_: self._validate_date_field()
         )
+        self.custom_vars['output_filename'].trace_add(
+            'write', lambda *_: self._validate_output_filename_field()
+        )
         self._register_field_link(
             custom_key  = 'tags',
             exif_key    = None,      # no EXIF tag for keywords
@@ -449,6 +458,7 @@ class PhotosUploader:
 
         # comments uses tk.Text (not StringVar) so it cannot use _register_field_link
         def _on_comments_changed(_event=None):
+            self._validate_caption_field()
             if not hasattr(self, '_exif_data'):
                 return
             widget = self.custom_vars['comments']
@@ -794,7 +804,9 @@ class PhotosUploader:
         if path not in self.custom_data:
             self._save_current_custom_fields()
         self.path_var.set(path)
-        self._update_button_states()
+        self._validate_caption_field()
+        self._validate_date_field()
+        self._validate_output_filename_field()
 
     def _display_photo(self, path: str):
         if not PIL_AVAILABLE:
@@ -918,8 +930,8 @@ class PhotosUploader:
 
     @staticmethod
     def _expand_year(yy: int) -> int:
-        """00–30 → 1900+yy (historical photos); 31–99 → 2000+yy."""
-        return (1900 if yy <= 30 else 2000) + yy
+        """00–35 → 2000+yy; 36–99 → 1900+yy (historical photos)."""
+        return (2000 if yy <= 35 else 1900) + yy
 
     def _parse_date(self, text: str) -> datetime | None:
         """Parse a user-supplied date string.  Returns a datetime or None.
@@ -1133,6 +1145,11 @@ class PhotosUploader:
     # Windows reserved names (case-insensitive, with or without extension)
     _RESERVED_NAMES: re.Pattern[str] = re.compile(
         r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$', re.IGNORECASE)
+    # Legal image file extensions (lowercase, without the dot)
+    _IMAGE_EXTENSIONS: frozenset[str] = frozenset({
+        'jpg', 'jpeg', 'png', 'gif', 'tif', 'tiff',
+        'bmp', 'webp', 'heic', 'heif',
+    })
 
     def _validate_output_filename(self, name: str) -> str | None:
         """Return an error message if *name* is not a valid filename, else None."""
@@ -1224,23 +1241,48 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Utilities
     # -----------------------------------------------------------------------
+    def _validate_output_filename_field(self):
+        """Require a legal filename with a recognised image extension; update bg and button state."""
+        name = self.custom_vars['output_filename'].get().strip()
+        _, dot_ext = os.path.splitext(name)
+        ext = dot_ext.lstrip('.').lower()
+        valid = (
+            bool(name)
+            and not self._ILLEGAL_FILENAME_CHARS.search(name)
+            and not self._RESERVED_NAMES.match(name)
+            and name == name.strip()
+            and not name.endswith('.')
+            and ext in self._IMAGE_EXTENSIONS
+        )
+        self._filename_valid = valid
+        self.output_filename_entry.config(bg='pink' if not valid else 'white')
+        self._update_button_states()
+
+    def _validate_caption_field(self):
+        """Require at least one non-blank character in Caption; update bg and button state."""
+        widget = self.custom_vars['comments']
+        value = widget.get('1.0', "end").strip()
+        valid = len(value) > 0
+        self._caption_valid = valid
+        widget.config(bg='pink' if not valid else 'white')
+        self._update_button_states()
+
     def _validate_date_field(self):
         """Validate Date of Photo; color the entry pink and gray the upload button if invalid."""
         text = self.custom_vars['date_of_photo'].get()
-        if text.strip() == '':
-            valid = True
-        else:
-            parsed = self._parse_date(text)
-            valid = parsed is not None and 1926 <= parsed.year <= 2050
+        parsed = self._parse_date(text)
+        valid = parsed is not None and 1926 <= parsed.year <= 2050
         self._date_valid = valid
         self.date_entry.config(bg='pink' if not valid else 'white')
         self._update_button_states()
 
     def _update_button_states(self):
         self.skip_btn.config(state="normal" if self.current_photo and self.input_paths else "disabled")
-        date_ok = getattr(self, '_date_valid', True)
+        date_ok     = getattr(self, '_date_valid',     False)
+        caption_ok  = getattr(self, '_caption_valid',  False)
+        filename_ok = getattr(self, '_filename_valid', False)
         self.upload_photo_btn.config(
-            state="normal" if self.current_photo and date_ok else "disabled")
+            state="normal" if self.current_photo and date_ok and caption_ok and filename_ok else "disabled")
         self.revert_btn.config(
             state="normal" if self.current_photo else "disabled")
         has_input_sel = bool(self.input_list.curselection())
