@@ -1418,12 +1418,21 @@ class PhotosUploader:
                 except Exception:
                     pass
 
-            # Remove the uploaded file from the input list
+            # Remove the uploaded file from the input list and move to next
             if path in self.input_paths:
                 idx = self.input_paths.index(path)
                 self.input_paths.pop(idx)
                 self.input_list.delete(idx)
                 self._update_counts()
+                if self.input_paths:
+                    next_idx = min(idx, len(self.input_paths) - 1)
+                    self.input_list.selection_clear(0, "end")
+                    self.input_list.selection_set(next_idx)
+                    self.input_list.see(next_idx)
+                    self.current_photo = self.input_paths[next_idx]
+                    self._load_photo(self.current_photo)
+                else:
+                    self._clear_viewer()
 
             self._record_upload(path, album, album_id=album_id, file_id=image_id)
             self.set_status(
