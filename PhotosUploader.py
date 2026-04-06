@@ -232,6 +232,7 @@ class PhotosUploader:
                    command=self.remove_all_input).pack(side="left", padx=2)
         ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side="left")
         ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side="left")
+        ttk.Button(btn_row, text="Sort", command=self.sort_input).pack(side="left", padx=2)
 
         # Count label
         self.input_count_var = tk.StringVar(value="0 items")
@@ -638,6 +639,19 @@ class PhotosUploader:
         self.input_list.delete(0, "end")
         self._clear_viewer()
         self._update_counts()
+
+    def sort_input(self):
+        if not self.input_paths:
+            return
+        self.input_paths.sort(key=lambda p: os.path.basename(p).lower())
+        self.input_list.delete(0, "end")
+        for p in self.input_paths:
+            self.input_list.insert("end", os.path.basename(p))
+        # Re-select the current photo if there is one
+        if self.current_photo and self.current_photo in self.input_paths:
+            idx = self.input_paths.index(self.current_photo)
+            self.input_list.selection_set(idx)
+            self.input_list.see(idx)
 
     def _move_item(self, listbox, direction):
         sel = listbox.curselection()
