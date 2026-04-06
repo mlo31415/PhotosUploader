@@ -338,9 +338,11 @@ class PhotosUploader:
         left_col = ttk.Frame(viewer_frame)
         left_col.pack(side="left", fill="y", padx=(0, 6))
 
-        self.upload_photo_btn = ttk.Button(left_col, text="⬆ Upload to Piwigo",
-                                           command=self._upload_current_photo,
-                                           state="disabled")
+        self.upload_photo_btn = tk.Button(left_col, text="⬆ Upload to Piwigo",
+                                          command=self._upload_current_photo,
+                                          background="#add8e6",
+                                          font=("TkDefaultFont", 10, "bold"),
+                                          state="disabled")
         self.upload_photo_btn.pack(fill="x", pady=(0, 4))
 
         nav = ttk.Frame(left_col)
