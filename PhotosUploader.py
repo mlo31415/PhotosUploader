@@ -415,7 +415,11 @@ class PhotosUploader:
                 self.custom_vars[key] = txt
             else:
                 var = tk.StringVar()
-                entry = ttk.Entry(custom_frame, textvariable=var, width=40)
+                if key == 'date_of_photo':
+                    entry = tk.Entry(custom_frame, textvariable=var, width=40)
+                    self.date_entry = entry
+                else:
+                    entry = ttk.Entry(custom_frame, textvariable=var, width=40)
                 entry.grid(row=row, column=2, sticky="ew", pady=2)
                 self.custom_vars[key] = var
         custom_frame.columnconfigure(2, weight=1)
@@ -432,6 +436,9 @@ class PhotosUploader:
             exif_key    = 'Date Created',
             iptc_tag    = (2, 55),   # Date Created
             validate_fn = self._parse_date,
+        )
+        self.custom_vars['date_of_photo'].trace_add(
+            'write', lambda *_: self._validate_date_field()
         )
         self._register_field_link(
             custom_key  = 'tags',
@@ -1217,9 +1224,23 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Utilities
     # -----------------------------------------------------------------------
+    def _validate_date_field(self):
+        """Validate Date of Photo; color the entry pink and gray the upload button if invalid."""
+        text = self.custom_vars['date_of_photo'].get()
+        if text.strip() == '':
+            valid = True
+        else:
+            parsed = self._parse_date(text)
+            valid = parsed is not None and 1926 <= parsed.year <= 2050
+        self._date_valid = valid
+        self.date_entry.config(bg='pink' if not valid else 'white')
+        self._update_button_states()
+
     def _update_button_states(self):
         self.skip_btn.config(state="normal" if self.current_photo and self.input_paths else "disabled")
-        self.upload_photo_btn.config(state="normal" if self.current_photo else "disabled")
+        date_ok = getattr(self, '_date_valid', True)
+        self.upload_photo_btn.config(
+            state="normal" if self.current_photo and date_ok else "disabled")
         self.revert_btn.config(
             state="normal" if self.current_photo else "disabled")
         has_input_sel = bool(self.input_list.curselection())
