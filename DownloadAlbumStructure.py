@@ -23,6 +23,7 @@ Public API
 import sys
 import json
 import time
+import mimetypes
 import threading
 import warnings
 import logging
@@ -272,7 +273,7 @@ class PiwigoClient:
                         r = self.session.post(
                             self.api_url,
                             data=data,
-                            files={'image': (filename, fh, 'image/jpeg')},
+                            files={'image': (filename, fh, mimetypes.guess_type(filename)[0] or 'image/jpeg')},
                             timeout=120,
                         )
                 r.raise_for_status()
