@@ -72,7 +72,7 @@ def _window_is_on_a_monitor(hwnd: int) -> bool:
 def load_state() -> dict[str, Any]:
     if STATE_FILE.exists():
         try:
-            with open(STATE_FILE) as f:
+            with open(STATE_FILE, encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
             pass
@@ -80,7 +80,7 @@ def load_state() -> dict[str, Any]:
 
 
 def save_state(state: dict[str, Any]) -> None:
-    with open(STATE_FILE, "w") as f:
+    with open(STATE_FILE, "w", encoding='utf-8') as f:
         json.dump(state, f, indent=2)
 
 
