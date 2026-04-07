@@ -102,7 +102,9 @@ def load_params() -> dict[str, Any]:
             '}\n\n'
             'Optional fields:\n'
             '  "path": "/path/to/data/directory"  (defaults to ".")\n'
-            '  "rate_limit_calls_per_second": 2.0  (API calls per second, defaults to 2.0)'
+            '  "rate_limit_calls_per_second": 2.0  (API calls per second, defaults to 2.0)\n'
+            '  "sync_metadata": true  (call pwg.images.syncMetadata after each upload, defaults to true)\n'
+            '  "refresh_representative": true  (call pwg.categories.refreshRepresentative after each upload, defaults to true)'
         )
     with open(PARAMS_FILE) as f:
         params = json.load(f)

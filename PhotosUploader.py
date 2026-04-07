@@ -1461,16 +1461,18 @@ class PhotosUploader:
                     tags=tags, date_creation=date_creation,
                 )
                 image_id = int(result.get('image_id', 0))
-                set_stage(f"Syncing metadata (pwg.images.syncMetadata)…")
-                try:
-                    client.sync_metadata(image_id)
-                except Exception as e:
-                    logger.warning(f"syncMetadata failed (non-fatal): {e}")
-                set_stage(f"Refreshing album thumbnail (pwg.categories.refreshRepresentative)…")
-                try:
-                    client.refresh_representative(album_id)
-                except Exception as e:
-                    logger.warning(f"refreshRepresentative failed (non-fatal): {e}")
+                if params.get('sync_metadata', True):
+                    set_stage("Syncing metadata (pwg.images.syncMetadata)…")
+                    try:
+                        client.sync_metadata(image_id)
+                    except Exception as e:
+                        logger.warning(f"syncMetadata failed (non-fatal): {e}")
+                if params.get('refresh_representative', True):
+                    set_stage("Refreshing album thumbnail (pwg.categories.refreshRepresentative)…")
+                    try:
+                        client.refresh_representative(album_id)
+                    except Exception as e:
+                        logger.warning(f"refreshRepresentative failed (non-fatal): {e}")
                 set_stage("Done.")
                 self.root.after(0, lambda: finish_ok(image_id))
             except Exception as exc:
