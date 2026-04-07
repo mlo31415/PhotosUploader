@@ -88,8 +88,7 @@ def save_state(state: dict[str, Any]) -> None:
 # Constants
 # ---------------------------------------------------------------------------
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff',
-                    '.tif', '.webp', '.heic', '.heif', '.raw', '.cr2',
-                    '.nef', '.arw', '.dng'}
+                    '.tif', '.webp', '.heic', '.heif'}
 
 EXIF_TAG_NAMES = {
     'DateTime': 'Date/Time',
@@ -537,7 +536,7 @@ class PhotosUploader:
         self.set_status(f"Added {added} image(s) to input queue.")
 
 
-    def _add_folder(self, folder: str, batch_state: dict[str, str] | None = {}) -> int:
+    def _add_folder(self, folder: str, batch_state: dict[str, str] | None = None) -> int:
         if batch_state is None:
             batch_state = {}
         added = 0
@@ -1145,26 +1144,6 @@ class PhotosUploader:
     # Windows reserved names (case-insensitive, with or without extension)
     _RESERVED_NAMES: re.Pattern[str] = re.compile(
         r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$', re.IGNORECASE)
-    # Legal image file extensions (lowercase, without the dot)
-    _IMAGE_EXTENSIONS: frozenset[str] = frozenset({
-        'jpg', 'jpeg', 'png', 'gif', 'tif', 'tiff',
-        'bmp', 'webp', 'heic', 'heif',
-    })
-
-    def _validate_output_filename(self, name: str) -> str | None:
-        """Return an error message if *name* is not a valid filename, else None."""
-        if not name:
-            return None  # empty means "use original filename" — always valid
-        if self._ILLEGAL_FILENAME_CHARS.search(name):
-            bad = ''.join(sorted(set(self._ILLEGAL_FILENAME_CHARS.findall(name))))
-            return (f'The output filename contains illegal character(s): {bad}\n\n'
-                    'A filename may not contain  \\ / : * ? " < > |')
-        if self._RESERVED_NAMES.match(name):
-            return (f'"{name}" is a reserved Windows filename and cannot be used.')
-        if name != name.strip() or name.endswith('.'):
-            return ('The output filename may not start or end with a space, '
-                    'or end with a period.')
-        return None
 
     def _load_file_dict(self) -> dict[str, list[dict[str, Any]]]:
         """Load FileDict.json and return it, or an empty dict if unavailable."""
@@ -1236,7 +1215,9 @@ class PhotosUploader:
                 widget.delete('1.0', "end")
             else:
                 widget.set('')
-        self._update_button_states()
+        self._validate_caption_field()
+        self._validate_date_field()
+        self._validate_output_filename_field()
 
     # -----------------------------------------------------------------------
     # Utilities
@@ -1250,9 +1231,8 @@ class PhotosUploader:
             bool(name)
             and not self._ILLEGAL_FILENAME_CHARS.search(name)
             and not self._RESERVED_NAMES.match(name)
-            and name == name.strip()
             and not name.endswith('.')
-            and ext in self._IMAGE_EXTENSIONS
+            and ('.' + ext) in IMAGE_EXTENSIONS
         )
         self._filename_valid = valid
         self.output_filename_entry.config(bg='pink' if not valid else 'white')
@@ -1584,6 +1564,7 @@ class PhotosUploader:
         save_state(self.state_data)
 
     def _on_close(self):
+        self._save_current_custom_fields()
         self.root.update_idletasks()
         x, y = self.root.winfo_x(), self.root.winfo_y()
         w, h = self.root.winfo_width(), self.root.winfo_height()
