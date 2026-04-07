@@ -102,7 +102,7 @@ def load_params() -> dict[str, Any]:
             '}\n\n'
             'Optional fields:\n'
             '  "path": "/path/to/data/directory"  (defaults to ".")\n'
-            '  "rate_limit_calls_per_secondond": 2.0  (API calls per second, defaults to 2.0)'
+            '  "rate_limit_calls_per_second": 2.0  (API calls per second, defaults to 2.0)'
         )
     with open(PARAMS_FILE) as f:
         params = json.load(f)
@@ -521,7 +521,7 @@ def run(parent: tk.Widget, set_status_cb):
     def finish_ok(n_albums):
         bar.stop()
         dlg.destroy()
-        msg = (f"Downloaded {n_albums} album(s). "
+        msg = (f"Downloaded {n_albums} albums. "
                f"Hierarchy written to {_album_hierarchy_file().name}")
         set_status_cb(msg)
 
@@ -1057,8 +1057,8 @@ def download_file_index(parent: tk.Widget, set_status_cb):
     def finish_ok(n_files, n_albums):
         bar.stop()
         dlg.destroy()
-        msg = (f"File index built: {n_files:,} unique file(s) across "
-               f"{n_albums} album(s). Written to {_file_index_file().name}.")
+        msg = (f"File index built: {n_files:,} unique files across "
+               f"{n_albums} albums. Written to {_file_index_file().name}.")
         set_status_cb(msg)
 
     def finish_err(err):
