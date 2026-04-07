@@ -45,6 +45,19 @@ except ImportError:
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# UI helpers
+# ---------------------------------------------------------------------------
+def _center_dialog(parent: tk.Widget, dlg: tk.Toplevel):
+    """Centre dlg over parent."""
+    parent.update_idletasks()
+    dlg.update_idletasks()
+    rx, ry = parent.winfo_rootx(), parent.winfo_rooty()
+    rw, rh = parent.winfo_width(), parent.winfo_height()
+    dw, dh = dlg.winfo_width(), dlg.winfo_height()
+    dlg.geometry(f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 2}")
+
 # ---------------------------------------------------------------------------
 # File paths
 # ---------------------------------------------------------------------------
@@ -59,10 +72,16 @@ def get_data_dir() -> Path:
         return Path('.')
 
 
-PARAMS_FILE          = Path(".") / "PhotosUploader Params.json"
-ALBUM_HIERARCHY_FILE = get_data_dir() / "AlbumHierarchy.json"
-FILE_INDEX_FILE      = get_data_dir() / "FileDict.json"
-REQUIRED_PARAMS      = ("url", "username", "password")
+PARAMS_FILE     = Path(".") / "PhotosUploader Params.json"
+REQUIRED_PARAMS = ("url", "username", "password")
+
+
+def _album_hierarchy_file() -> Path:
+    return get_data_dir() / "AlbumHierarchy.json"
+
+
+def _file_index_file() -> Path:
+    return get_data_dir() / "FileDict.json"
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +424,8 @@ def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
     flat = client.get_albums()
     step_cb("Building hierarchy…")
     hierarchy = _build_hierarchy(flat)
-    step_cb(f"Writing {ALBUM_HIERARCHY_FILE.name}…")
-    with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
+    step_cb(f"Writing {_album_hierarchy_file().name}…")
+    with open(_album_hierarchy_file(), "w", encoding="utf-8") as f:
         json.dump(hierarchy, f, indent=2, ensure_ascii=False)
     return len(flat)
 
@@ -454,7 +473,7 @@ def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
             if not any(e["album_id"] == cat_id for e in entries):
                 entries.append(entry)
 
-    with open(FILE_INDEX_FILE, "w", encoding="utf-8") as f:
+    with open(_file_index_file(), "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
 
     return index
@@ -482,10 +501,8 @@ def run(parent: tk.Widget, set_status_cb):
     dlg.resizable(False, False)
     dlg.grab_set()
 
-    parent.update_idletasks()
-    rx = parent.winfo_x() + parent.winfo_width()  // 2
-    ry = parent.winfo_y() + parent.winfo_height() // 2
-    dlg.geometry(f"360x120+{rx - 180}+{ry - 60}")
+    dlg.geometry("360x120")
+    _center_dialog(parent, dlg)
 
     ttk.Label(dlg, text="Downloading album hierarchy from Piwigo…",
               padding=(12, 10, 12, 4)).pack()
@@ -504,7 +521,7 @@ def run(parent: tk.Widget, set_status_cb):
         bar.stop()
         dlg.destroy()
         msg = (f"Downloaded {n_albums} album(s). "
-               f"Hierarchy written to {ALBUM_HIERARCHY_FILE.name}")
+               f"Hierarchy written to {_album_hierarchy_file().name}")
         set_status_cb(msg)
 
     def finish_err(err):
@@ -564,9 +581,9 @@ def add_album(parent: tk.Widget, set_status_cb):
     # Load existing hierarchy for the parent picker (may be empty if not yet
     # downloaded — user can still create a top-level album).
     hierarchy = []
-    if ALBUM_HIERARCHY_FILE.exists():
+    if _album_hierarchy_file().exists():
         try:
-            with open(ALBUM_HIERARCHY_FILE, encoding="utf-8") as f:
+            with open(_album_hierarchy_file(), encoding="utf-8") as f:
                 data = json.load(f)
             # Validate that it's a list (expected hierarchy format)
             if not isinstance(data, list):
@@ -611,10 +628,8 @@ def add_album(parent: tk.Widget, set_status_cb):
     dlg.resizable(False, False)
     dlg.grab_set()
 
-    parent.update_idletasks()
-    rx = parent.winfo_x() + parent.winfo_width()  // 2
-    ry = parent.winfo_y() + parent.winfo_height() // 2
-    dlg.geometry(f"480x520+{rx - 240}+{ry - 260}")
+    dlg.geometry("480x520")
+    _center_dialog(parent, dlg)
 
     ttk.Label(dlg,
               text="Parent album  (leave unselected to create a top-level album):",
@@ -752,7 +767,7 @@ def add_album(parent: tk.Widget, set_status_cb):
                 siblings.append(new_node)
                 siblings.sort(key=lambda n: n["name"].lower())
 
-                with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
+                with open(_album_hierarchy_file(), "w", encoding="utf-8") as f:
                     json.dump(hierarchy, f, indent=2, ensure_ascii=False)
 
                 parent.after(0, lambda fn=new_fullname, nid=new_id: finish_ok(fn, nid))
@@ -768,7 +783,7 @@ def add_album(parent: tk.Widget, set_status_cb):
         dlg.destroy()
         set_status_cb(
             f"Album '{new_fullname}' created (id {new_id}). "
-            f"{ALBUM_HIERARCHY_FILE.name} updated."
+            f"{_album_hierarchy_file().name} updated."
         )
 
     def finish_err(err):
@@ -791,9 +806,9 @@ def add_album(parent: tk.Widget, set_status_cb):
 # ---------------------------------------------------------------------------
 def _hierarchy_is_fresh() -> bool:
     """Return True if AlbumHierarchy.json exists and is less than 24 hours old."""
-    if not ALBUM_HIERARCHY_FILE.exists():
+    if not _album_hierarchy_file().exists():
         return False
-    return (time.time() - ALBUM_HIERARCHY_FILE.stat().st_mtime) < 86400
+    return (time.time() - _album_hierarchy_file().stat().st_mtime) < 86400
 
 
 def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
@@ -805,7 +820,7 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
 
     def open_picker():
         try:
-            with open(ALBUM_HIERARCHY_FILE, encoding="utf-8") as f:
+            with open(_album_hierarchy_file(), encoding="utf-8") as f:
                 hierarchy = json.load(f)
         except Exception as exc:
             messagebox.showerror("Error",
@@ -830,10 +845,8 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
     dlg.resizable(False, False)
     dlg.grab_set()
 
-    parent.update_idletasks()
-    rx = parent.winfo_x() + parent.winfo_width()  // 2
-    ry = parent.winfo_y() + parent.winfo_height() // 2
-    dlg.geometry(f"340x90+{rx - 170}+{ry - 45}")
+    dlg.geometry("340x90")
+    _center_dialog(parent, dlg)
 
     ttk.Label(dlg, text="Refreshing album hierarchy from Piwigo…",
               padding=(12, 10, 12, 4)).pack()
@@ -850,7 +863,7 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
     def on_err(err):
         bar.stop()
         dlg.destroy()
-        if ALBUM_HIERARCHY_FILE.exists():
+        if _album_hierarchy_file().exists():
             if messagebox.askyesno(
                 "Refresh failed",
                 f"Could not refresh album hierarchy:\n{err}\n\n"
@@ -888,10 +901,8 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
     dlg.title("Select Upload Album")
     dlg.grab_set()
 
-    parent.update_idletasks()
-    rx = parent.winfo_x() + parent.winfo_width()  // 2
-    ry = parent.winfo_y() + parent.winfo_height() // 2
-    dlg.geometry(f"440x580+{rx - 220}+{ry - 290}")
+    dlg.geometry("440x580")
+    _center_dialog(parent, dlg)
 
     # ── Filter bar ───────────────────────────────────────────────────────────
     filter_frame = ttk.Frame(dlg, padding=(8, 8, 8, 4))
@@ -1017,10 +1028,8 @@ def download_file_index(parent: tk.Widget, set_status_cb):
     dlg.resizable(False, False)
     dlg.grab_set()
 
-    parent.update_idletasks()
-    rx = parent.winfo_x() + parent.winfo_width()  // 2
-    ry = parent.winfo_y() + parent.winfo_height() // 2
-    dlg.geometry(f"400x130+{rx - 200}+{ry - 65}")
+    dlg.geometry("400x130")
+    _center_dialog(parent, dlg)
 
     ttk.Label(dlg, text="Building file index from Piwigo…",
               padding=(12, 10, 12, 2)).pack()
@@ -1048,7 +1057,7 @@ def download_file_index(parent: tk.Widget, set_status_cb):
         bar.stop()
         dlg.destroy()
         msg = (f"File index built: {n_files:,} unique file(s) across "
-               f"{n_albums} album(s). Written to {FILE_INDEX_FILE.name}.")
+               f"{n_albums} album(s). Written to {_file_index_file().name}.")
         set_status_cb(msg)
 
     def finish_err(err):
@@ -1077,7 +1086,7 @@ def download_file_index(parent: tk.Widget, set_status_cb):
             if not _hierarchy_is_fresh():
                 parent.after(0, lambda: set_step("Saving album hierarchy…"))
                 hierarchy = _build_hierarchy(flat_albums)
-                with open(ALBUM_HIERARCHY_FILE, "w", encoding="utf-8") as f:
+                with open(_album_hierarchy_file(), "w", encoding="utf-8") as f:
                     json.dump(hierarchy, f, indent=2, ensure_ascii=False)
 
             index = _fetch_and_save_file_index(client, flat_albums, on_progress)
@@ -1104,9 +1113,9 @@ def record_uploaded_file(filename: str, album_fullname: str,
     Safe to call from the main thread.
     """
     index: dict[str, list[dict]] = {}
-    if FILE_INDEX_FILE.exists():
+    if _file_index_file().exists():
         try:
-            with open(FILE_INDEX_FILE, encoding="utf-8") as f:
+            with open(_file_index_file(), encoding="utf-8") as f:
                 index = json.load(f)
         except Exception:
             pass
@@ -1117,5 +1126,5 @@ def record_uploaded_file(filename: str, album_fullname: str,
                         "album_id": album_id,
                         "file_id":  file_id})
 
-    with open(FILE_INDEX_FILE, "w", encoding="utf-8") as f:
+    with open(_file_index_file(), "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)

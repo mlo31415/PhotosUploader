@@ -1141,7 +1141,7 @@ class PhotosUploader:
 
     def _load_file_dict(self) -> dict[str, list[dict[str, Any]]]:
         """Load FileDict.json and return it, or an empty dict if unavailable."""
-        p = Path(DownloadAlbumStructure.FILE_INDEX_FILE)
+        p = DownloadAlbumStructure._file_index_file()
         if not p.exists():
             return {}
         try:
