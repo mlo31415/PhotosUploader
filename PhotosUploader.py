@@ -184,7 +184,6 @@ class PhotosUploader:
         self._validate_date_field()            # start pink since date is empty
         self._validate_output_filename_field() # start pink since filename is empty
         self._bind_shortcuts()
-        self.custom_data = dict(self.state_data.get("custom_data", {}))
         self.root.update_idletasks()
         self._restore_geometry()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -525,7 +524,11 @@ class PhotosUploader:
             ("Image files", " ".join(f"*{e}" for e in IMAGE_EXTENSIONS)),
             ("All files", "*.*"),
         ]
-        paths = filedialog.askopenfilenames(title="Select Images", filetypes=filetypes)
+        initialdir = self.state_data.get("input_path") or None
+        paths = filedialog.askopenfilenames(title="Select Images", filetypes=filetypes,
+                                            initialdir=initialdir)
+        if paths:
+            self.state_data["input_path"] = os.path.dirname(paths[-1])
         batch_state = {}
         added = 0
         for p in paths:
@@ -803,10 +806,6 @@ class PhotosUploader:
         self._load_exif(path)
         self._load_iptc(path)
         self._load_custom_fields(path)
-        # Snapshot field values (IPTC-seeded or previously saved) so they
-        # survive a restart even if the user never navigates away.
-        if path not in self.custom_data:
-            self._save_current_custom_fields()
         self.path_var.set(path)
         self._validate_caption_field()
         self._validate_date_field()
@@ -1562,7 +1561,8 @@ class PhotosUploader:
         album = self.upload_album_var.get()
         self.state_data["upload_album"]    = album if album != "(none)" else ""
         self.state_data["upload_album_id"] = self.upload_album_id
-        self.state_data["custom_data"]     = dict(self.custom_data)
+        # input_path is updated in-place by add_photos_dialog; just ensure the key exists
+        self.state_data.setdefault("input_path", "")
         save_state(self.state_data)
 
     def _on_close(self):
