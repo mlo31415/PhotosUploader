@@ -1298,14 +1298,17 @@ class PhotosUploader:
         DownloadAlbumStructure.record_uploaded_file(
             filename, album_fullname, album_id=album_id, file_id=file_id)
 
-    def _create_temp_copy_without_exif(self, path: str) -> str | None:
-        """Create a temp copy of the file with EXIF data stripped.
+    def _prepare_upload_copy(self, path: str, params: dict) -> str | None:
+        """Create a temp copy of the file for upload, optionally resized and with EXIF stripped.
 
-        Returns the path to the temp file, or None if stripping fails.
-        Caller is responsible for deleting the temp file after use.
+        If 'max_upload_pixels' is set in params (e.g. 2000000 for 2 MP), the image is
+        downsampled so that width*height does not exceed that value.  Aspect ratio is
+        preserved.  The original file is never modified.
+
+        Returns the path to the temp file, or None if preparation fails (caller should
+        fall back to the original file).  Caller is responsible for deleting the temp file.
         """
-        if not PIEXIF_AVAILABLE:
-            # No piexif available, just use the original file
+        if not PIL_AVAILABLE:
             return None
 
         try:
@@ -1313,17 +1316,29 @@ class PhotosUploader:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
                 temp_path = tmp.name
 
-            shutil.copy2(path, temp_path)
+            max_pixels = params.get('max_upload_pixels')
+            if max_pixels:
+                img = Image.open(path)  # type: ignore[possibly-undefined]
+                w, h = img.size
+                if w * h > max_pixels:
+                    scale = (max_pixels / (w * h)) ** 0.5
+                    new_w = max(1, int(w * scale))
+                    new_h = max(1, int(h * scale))
+                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
+                img.save(temp_path)
+            else:
+                shutil.copy2(path, temp_path)
 
             # Strip EXIF from temp copy
-            try:
-                piexif.insert(piexif.dump({}), temp_path)
-            except Exception:
-                pass  # Continue even if stripping fails
+            if PIEXIF_AVAILABLE:
+                try:
+                    piexif.insert(piexif.dump({}), temp_path)
+                except Exception:
+                    pass
 
             return temp_path
         except Exception as e:
-            self.set_status(f"Warning: could not create temp copy: {e}")
+            self.set_status(f"Warning: could not create upload copy: {e}")
             return None
 
     def _upload_current_photo(self):
@@ -1413,12 +1428,6 @@ class PhotosUploader:
                 return
 
         self.set_status(f"Uploading {output_filename}…")
-        self.root.update_idletasks()
-
-        # Create a temp copy without EXIF to avoid Piwigo errors
-        temp_path = self._create_temp_copy_without_exif(path)
-        upload_path = temp_path if temp_path else path
-        logger.debug(f"Uploading to Piwigo: album_id={album_id}, album={album}, path={upload_path}")
 
         # Progress dialog
         progress_dlg = tk.Toplevel(self.root)
@@ -1433,7 +1442,7 @@ class PhotosUploader:
         pbar = ttk.Progressbar(progress_dlg, mode='indeterminate', length=320)
         pbar.pack(padx=16, pady=(0, 8))
         pbar.start(12)
-        progress_stage_var = tk.StringVar(value="Connecting…")
+        progress_stage_var = tk.StringVar(value="Preparing image…")
         ttk.Label(progress_dlg, textvariable=progress_stage_var,
                   foreground="gray", padding=(16, 0, 16, 12)).pack()
         self._center_dialog(progress_dlg)
@@ -1447,6 +1456,12 @@ class PhotosUploader:
             progress_dlg.destroy()
 
         def worker():
+            # Prepare upload copy (resize + EXIF strip) inside the thread so the
+            # UI is never blocked and the progress dialog covers the full operation.
+            temp_path = self._prepare_upload_copy(path, params)
+            upload_path = temp_path if temp_path else path
+            logger.debug(f"Uploading to Piwigo: album_id={album_id}, album={album}, path={upload_path}")
+
             client = DownloadAlbumStructure.PiwigoClient(
                 params['url'], params['username'], params['password'],
                 verify_ssl=params.get('verify_ssl', True),
@@ -1480,16 +1495,14 @@ class PhotosUploader:
                 self.root.after(0, lambda: finish_err(err))
             finally:
                 client.logout()
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
 
         def finish_ok(image_id):
             close_progress()
-            # Clean up temp copy if one was created
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-
             # Remove the uploaded file from the input list and move to next
             queue_path = original_path if original_path in self.input_paths else path
             if queue_path in self.input_paths:
@@ -1513,12 +1526,6 @@ class PhotosUploader:
 
         def finish_err(err):
             close_progress()
-            # Clean up temp copy if one was created
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
             messagebox.showerror("Upload Failed",
                                  f"Could not upload {output_filename}:\n\n{err}",
                                  parent=self.root)

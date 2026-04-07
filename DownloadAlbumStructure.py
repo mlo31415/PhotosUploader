@@ -104,7 +104,8 @@ def load_params() -> dict[str, Any]:
             '  "path": "/path/to/data/directory"  (defaults to ".")\n'
             '  "rate_limit_calls_per_second": 2.0  (API calls per second, defaults to 2.0)\n'
             '  "sync_metadata": true  (call pwg.images.syncMetadata after each upload, defaults to true)\n'
-            '  "refresh_representative": true  (call pwg.categories.refreshRepresentative after each upload, defaults to true)'
+            '  "refresh_representative": true  (call pwg.categories.refreshRepresentative after each upload, defaults to true)\n'
+            '  "max_upload_pixels": 4000000  (downsample images larger than this pixel count before uploading; omit to upload at full resolution)'
         )
     with open(PARAMS_FILE) as f:
         params = json.load(f)
