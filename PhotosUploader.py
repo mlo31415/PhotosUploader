@@ -1345,6 +1345,7 @@ class PhotosUploader:
             return
 
         path = self.current_photo
+        original_path = path  # preserved for queue removal even if path is renamed
 
         try:
             params = DownloadAlbumStructure.load_params()
@@ -1491,8 +1492,9 @@ class PhotosUploader:
                     pass
 
             # Remove the uploaded file from the input list and move to next
-            if path in self.input_paths:
-                idx = self.input_paths.index(path)
+            queue_path = original_path if original_path in self.input_paths else path
+            if queue_path in self.input_paths:
+                idx = self.input_paths.index(queue_path)
                 self.input_paths.pop(idx)
                 self.input_list.delete(idx)
                 self._update_counts()
