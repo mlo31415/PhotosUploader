@@ -513,7 +513,6 @@ class PhotosUploader:
                 added += self._add_folder(p, batch_state)
             elif is_image(p):
                 if self._add_single_image(p, batch_state):
-                    self.input_list.itemconfig("end", {'foreground': '#000'})
                     added += 1
         self._update_counts()
         self.set_status(f"Dropped {added} image(s) into input queue.")
@@ -1564,6 +1563,7 @@ class PhotosUploader:
 
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
+        self.root.bind('<Control-u>', lambda e: self._upload_current_photo())
 
 
 # ---------------------------------------------------------------------------
