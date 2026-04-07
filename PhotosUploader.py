@@ -752,8 +752,16 @@ class PhotosUploader:
                 source = p
                 break
 
-        # If not found, fall back to current photo file
+        # If not found, warn that the copy may not be clean and ask to proceed
         if not source:
+            if not messagebox.askyesno(
+                "Revert",
+                "No unmodified original was found in the input queue.\n\n"
+                "The current file may already have had metadata written to it.\n\n"
+                "Copy it anyway?",
+                parent=self.root,
+            ):
+                return
             source = self.current_photo
 
         src_dir = os.path.dirname(source) or '.'
@@ -1056,7 +1064,8 @@ class PhotosUploader:
         if sel:
             vals = self.exif_tree.item(sel[0], 'values')
             if vals:
-                self.exif_edit_var.set(vals[1] if len(vals) > 1 else '')
+                # Read the full (untruncated) value from _exif_data, not the display cell
+                self.exif_edit_var.set(self._exif_data.get(vals[0], vals[1] if len(vals) > 1 else ''))
 
     def _refresh_exif_tree(self, reselect_key: str | None = None):
         """Rebuild the EXIF treeview from self._exif_data in place."""
