@@ -168,6 +168,8 @@ class PhotosUploader:
         self.custom_data = {}       # path -> dict of custom field values
         self._field_links = []      # list of link descriptors; see _register_field_link
         self.persist_vars = {}      # {field_key: BooleanVar} for persist checkboxes
+        self._exif_data   = {}      # display-name -> value for the current photo
+        self._field_validity = {'date': False, 'caption': False, 'filename': False}
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -237,7 +239,7 @@ class PhotosUploader:
         ttk.Button(btn_row, text="Sort", command=self.sort_input).pack(side="left", padx=2)
 
         # Count label
-        self.input_count_var = tk.StringVar(value="0 items")
+        self.input_count_var = tk.StringVar(value="0 items")  # kept in sync by _update_counts
         ttk.Label(btn_row, textvariable=self.input_count_var).pack(side="right", padx=4)
 
         # Listbox with scrollbars
@@ -458,8 +460,6 @@ class PhotosUploader:
         # comments uses tk.Text (not StringVar) so it cannot use _register_field_link
         def _on_comments_changed(_event=None):
             self._validate_caption_field()
-            if not hasattr(self, '_exif_data'):
-                return
             widget = self.custom_vars['comments']
             value = widget.get('1.0', "end").strip()
             self._exif_data['Description'] = value
@@ -572,10 +572,8 @@ class PhotosUploader:
         dlg.resizable(False, False)
         dlg.grab_set()
 
-        self.root.update_idletasks()
-        rx = self.root.winfo_x() + self.root.winfo_width()  // 2
-        ry = self.root.winfo_y() + self.root.winfo_height() // 2
-        dlg.geometry(f"500x150+{rx - 250}+{ry - 75}")
+        dlg.geometry("500x150")
+        self._center_dialog(dlg)
 
         msg = (f'A file named "{name}" is already in the input queue.\n\n'
                f'Existing:  {existing_path}\n'
@@ -868,8 +866,6 @@ class PhotosUploader:
         self._field_links.append(link)
 
         def _on_custom_changed(*_):
-            if not hasattr(self, '_exif_data'):
-                return
             if link['syncing']:
                 return
             value = self.custom_vars[custom_key].get().strip()
@@ -1171,11 +1167,10 @@ class PhotosUploader:
         if not PIEXIF_AVAILABLE:
             return
         assert piexif is not None
-        custom   = self.custom_data.get(path, {})
-        comments = custom.get('comments', '').strip()
-        source   = custom.get('photo_source', '').strip()
-        out_name = custom.get('output_filename', '').strip()
-        raw_date = custom.get('date_of_photo', '').strip()
+        comments = self.custom_vars['comments'].get('1.0', 'end').strip()
+        source   = self.custom_vars['photo_source'].get().strip()
+        out_name = self.custom_vars['output_filename'].get().strip()
+        raw_date = self.custom_vars['date_of_photo'].get().strip()
         parsed_date = self._parse_date(raw_date) if raw_date else None
         if not any([comments, source, out_name, parsed_date]):
             return
@@ -1234,7 +1229,7 @@ class PhotosUploader:
             and not name.endswith('.')
             and ('.' + ext) in IMAGE_EXTENSIONS
         )
-        self._filename_valid = valid
+        self._field_validity['filename'] = valid
         self.output_filename_entry.config(bg='pink' if not valid else 'white')
         self._update_button_states()
 
@@ -1243,7 +1238,7 @@ class PhotosUploader:
         widget = self.custom_vars['comments']
         value = widget.get('1.0', "end").strip()
         valid = len(value) > 0
-        self._caption_valid = valid
+        self._field_validity['caption'] = valid
         widget.config(bg='pink' if not valid else 'white')
         self._update_button_states()
 
@@ -1252,17 +1247,14 @@ class PhotosUploader:
         text = self.custom_vars['date_of_photo'].get()
         parsed = self._parse_date(text)
         valid = parsed is not None and 1926 <= parsed.year <= 2050
-        self._date_valid = valid
+        self._field_validity['date'] = valid
         self.date_entry.config(bg='pink' if not valid else 'white')
         self._update_button_states()
 
     def _update_button_states(self):
         self.skip_btn.config(state="normal" if self.current_photo and self.input_paths else "disabled")
-        date_ok     = getattr(self, '_date_valid',     False)
-        caption_ok  = getattr(self, '_caption_valid',  False)
-        filename_ok = getattr(self, '_filename_valid', False)
         self.upload_photo_btn.config(
-            state="normal" if self.current_photo and date_ok and caption_ok and filename_ok else "disabled")
+            state="normal" if self.current_photo and all(self._field_validity.values()) else "disabled")
         self.revert_btn.config(
             state="normal" if self.current_photo else "disabled")
         has_input_sel = bool(self.input_list.curselection())
@@ -1270,12 +1262,20 @@ class PhotosUploader:
             state="normal" if has_input_sel else "disabled")
 
     def _update_counts(self):
-        self.input_count_var.set(f"{len(self.input_paths)} item(s)")
+        self.input_count_var.set(f"{len(self.input_paths)} items")
         self._update_button_states()
+
+    def _center_dialog(self, dlg: tk.Toplevel):
+        """Centre dlg over the main window."""
+        self.root.update_idletasks()
+        dlg.update_idletasks()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        dw, dh = dlg.winfo_width(), dlg.winfo_height()
+        dlg.geometry(f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 2}")
 
     def set_status(self, msg: str):
         self.status_var.set(msg)
-        self.root.update_idletasks()
 
 
     def _add_new_album(self):
@@ -1303,17 +1303,14 @@ class PhotosUploader:
             return None
 
         try:
-            # Create temp file with same name and extension
-            filename = os.path.basename(path)
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, filename)
+            _, ext = os.path.splitext(path)
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                temp_path = tmp.name
 
-            # Copy original to temp location
             shutil.copy2(path, temp_path)
 
             # Strip EXIF from temp copy
             try:
-                exif_dict = piexif.load(temp_path)
                 piexif.insert(piexif.dump({}), temp_path)
             except Exception:
                 pass  # Continue even if stripping fails
@@ -1432,13 +1429,7 @@ class PhotosUploader:
         progress_stage_var = tk.StringVar(value="Connecting…")
         ttk.Label(progress_dlg, textvariable=progress_stage_var,
                   foreground="gray", padding=(16, 0, 16, 12)).pack()
-        # Centre over main window
-        self.root.update_idletasks()
-        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
-        rw, rh = self.root.winfo_width(), self.root.winfo_height()
-        progress_dlg.update_idletasks()
-        dw, dh = progress_dlg.winfo_width(), progress_dlg.winfo_height()
-        progress_dlg.geometry(f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 2}")
+        self._center_dialog(progress_dlg)
 
         def set_stage(msg: str):
             self.root.after(0, lambda: progress_stage_var.set(msg))
