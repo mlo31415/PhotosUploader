@@ -1116,10 +1116,9 @@ class PhotosUploader:
             else:
                 widget.set(val)
 
-        # Always reset output filename to the current photo's basename,
-        # unless this photo has a saved custom value.
-        if data is None or 'output_filename' not in data:
-            self.custom_vars['output_filename'].set(os.path.basename(path))
+        # Set output filename: use saved value if present, else default to basename.
+        saved_fn = data.get('output_filename') if data else None
+        self.custom_vars['output_filename'].set(saved_fn if saved_fn else os.path.basename(path))
 
     def _save_current_custom_fields(self):
         if not self.current_photo:
