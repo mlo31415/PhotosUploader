@@ -446,7 +446,7 @@ def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
 # File-index builder
 # ---------------------------------------------------------------------------
 def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
-                               progress_cb) -> dict[str, list[dict]]:
+                               progress_cb, cancel_flag: list | None = None) -> dict[str, list[dict]]:
     """Walk every album, collect filenames, and write FileDict.json.
 
     progress_cb(done: int, total: int, album_name: str) is called after each
@@ -468,6 +468,8 @@ def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
     total = len(flat_albums)
 
     for done, cat in enumerate(flat_albums, 1):
+        if cancel_flag and cancel_flag[0]:
+            raise InterruptedError("File index download cancelled by user.")
         cat_id   = int(cat["id"])
         fullname = fullname_by_id[cat_id]
         # Strip the short name for progress reporting
@@ -1049,7 +1051,7 @@ def download_file_index(parent: tk.Widget, set_status_cb):
     dlg.resizable(False, False)
     dlg.grab_set()
 
-    dlg.geometry("400x130")
+    dlg.geometry("400x160")
     _center_dialog(parent, dlg)
 
     ttk.Label(dlg, text="Building file index from Piwigo…",
@@ -1060,7 +1062,16 @@ def download_file_index(parent: tk.Widget, set_status_cb):
               padding=(12, 0, 12, 4)).pack()
 
     bar = ttk.Progressbar(dlg, mode="determinate", length=360)
-    bar.pack(padx=12, pady=(0, 12))
+    bar.pack(padx=12, pady=(0, 8))
+
+    cancel_flag = [False]
+
+    def on_cancel():
+        cancel_flag[0] = True
+        cancel_btn.config(state="disabled", text="Cancelling…")
+
+    cancel_btn = ttk.Button(dlg, text="Cancel", command=on_cancel)
+    cancel_btn.pack(pady=(0, 10))
 
     def set_step(msg):
         step_var.set(msg)
@@ -1074,12 +1085,20 @@ def download_file_index(parent: tk.Widget, set_status_cb):
         bar["value"]   = done
         step_var.set(f"({done}/{total})  {album_name}")
 
+    dlg.protocol("WM_DELETE_WINDOW", on_cancel)
+
     def finish_ok(n_files, n_albums):
         bar.stop()
         dlg.destroy()
         msg = (f"File index built: {n_files:,} unique files across "
                f"{n_albums} albums. Written to {_file_index_file().name}.")
         set_status_cb(msg)
+
+    def finish_cancelled():
+        if dlg.winfo_exists():
+            bar.stop()
+            dlg.destroy()
+        set_status_cb("File index download cancelled.")
 
     def finish_err(err):
         bar.stop()
@@ -1110,8 +1129,11 @@ def download_file_index(parent: tk.Widget, set_status_cb):
                 with open(_album_hierarchy_file(), "w", encoding="utf-8") as f:
                     json.dump(hierarchy, f, indent=2, ensure_ascii=False)
 
-            index = _fetch_and_save_file_index(client, flat_albums, on_progress)
+            index = _fetch_and_save_file_index(client, flat_albums, on_progress,
+                                               cancel_flag=cancel_flag)
             parent.after(0, lambda: finish_ok(len(index), len(flat_albums)))
+        except InterruptedError:
+            parent.after(0, finish_cancelled)
         except Exception as exc:
             err = str(exc)
             parent.after(0, lambda: finish_err(err))
