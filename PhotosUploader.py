@@ -1046,7 +1046,8 @@ class PhotosUploader:
                 self._exif_data[link['exif_key']] = value
 
             # Don't overwrite a persisted field
-            if self.persist_vars[link['custom_key']].get():
+            persist_var = self.persist_vars.get(link['custom_key'])
+            if persist_var and persist_var.get():
                 continue
 
             # Populate the custom field under the reentrancy guard
