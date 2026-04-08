@@ -74,8 +74,8 @@ def load_state() -> dict[str, Any]:
         try:
             with open(STATE_FILE, encoding='utf-8') as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not load state file {STATE_FILE}: {e} — starting with defaults.")
     return {}
 
 

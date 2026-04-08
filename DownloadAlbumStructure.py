@@ -278,25 +278,25 @@ class PiwigoClient:
                             files={'image': (filename, fh, mimetypes.guess_type(filename)[0] or 'image/jpeg')},
                             timeout=120,
                         )
-                r.raise_for_status()
-                try:
-                    resp = r.json()
-                except ValueError:
-                    preview = r.text[:400].strip() if r.text else "(empty)"
-                    raise RuntimeError(
-                        f"Server did not return valid JSON for upload of {filename}.\n"
-                        f"HTTP status: {r.status_code}\n"
-                        f"Response preview:\n{preview}"
-                    )
-                stat = resp.get('stat')
-                message = resp.get('message', '')
-                if message:
-                    logger.info(f"[upload] server message: {message}")
-                if stat != 'ok':
-                    raise RuntimeError(message or 'Unknown Piwigo upload error')
-                result = resp.get('result', {})
-                logger.info(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url', '?')}")
-                return result
+                        r.raise_for_status()
+                        try:
+                            resp = r.json()
+                        except ValueError:
+                            preview = r.text[:400].strip() if r.text else "(empty)"
+                            raise RuntimeError(
+                                f"Server did not return valid JSON for upload of {filename}.\n"
+                                f"HTTP status: {r.status_code}\n"
+                                f"Response preview:\n{preview}"
+                            )
+                        stat = resp.get('stat')
+                        message = resp.get('message', '')
+                        if message:
+                            logger.info(f"[upload] server message: {message}")
+                        if stat != 'ok':
+                            raise RuntimeError(message or 'Unknown Piwigo upload error')
+                        result = resp.get('result', {})
+                        logger.info(f"[upload] success: image_id={result.get('image_id')}, url={result.get('url', '?')}")
+                        return result
             except (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout) as e:
                 retry_count += 1
                 last_error = e
