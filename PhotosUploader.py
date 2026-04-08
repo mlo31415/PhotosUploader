@@ -823,6 +823,8 @@ class PhotosUploader:
             except OSError:
                 current_mtime = None
             if path != self._cached_image_path or current_mtime != self._cached_image_mtime:
+                if self._cached_image is not None:
+                    self._cached_image.close()
                 self._cached_image = Image.open(path)  # type: ignore[possibly-undefined]
                 self._cached_image_path = path
                 self._cached_image_mtime = current_mtime
@@ -834,14 +836,20 @@ class PhotosUploader:
                 return
             cw = max(self.canvas.winfo_width(), 100)
             ch = max(self.canvas.winfo_height(), 100)
-            thumb = img.copy()
-            thumb.thumbnail((cw, ch), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
+            # Compute scaled size preserving aspect ratio, then resize into a new
+            # image — avoids copying the full-resolution buffer just to thumbnail it.
+            iw, ih = img.size  # type: ignore[possibly-undefined]
+            scale = min(cw / iw, ch / ih, 1.0)
+            tw, th = max(1, int(iw * scale)), max(1, int(ih * scale))
+            thumb = img.resize((tw, th), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
             self.photo_image = ImageTk.PhotoImage(thumb)
             self.canvas.delete('all')
             self.canvas.create_image(cw // 2, ch // 2,
                                      anchor="center",
                                      image=self.photo_image)
         except Exception as e:
+            if self._cached_image is not None:
+                self._cached_image.close()
             self._cached_image = None
             self._cached_image_path = None
             self._cached_image_mtime = None
@@ -1220,6 +1228,8 @@ class PhotosUploader:
         """Reset the photo viewer, EXIF tree, and all custom fields to empty."""
         self.current_photo = None
         self.photo_image   = None
+        if self._cached_image is not None:
+            self._cached_image.close()
         self._cached_image = None
         self._cached_image_path = None
         self._cached_image_mtime = None
