@@ -936,10 +936,17 @@ class PhotosUploader:
         'dec': 12, 'december': 12,
     }
 
+    # Two-digit year cutoff: yy <= _2DY_CUTOFF → 2000s, yy > _2DY_CUTOFF → 1900s.
+    # The minimum year producible from 2-digit input is therefore 1900 + (_2DY_CUTOFF + 1).
+    # _DATE_MIN_YEAR is derived from this so date validation stays in sync.
+    _2DY_CUTOFF:    int = 35   # 00–35 → 2000–2035; 36–99 → 1936–1999
+    _DATE_MIN_YEAR: int = 1900 + _2DY_CUTOFF + 1   # = 1936
+    _DATE_MAX_YEAR: int = 2000 + _2DY_CUTOFF        # = 2035
+
     @staticmethod
     def _expand_year(yy: int) -> int:
         """00–35 → 2000+yy; 36–99 → 1900+yy (historical photos)."""
-        return (2000 if yy <= 35 else 1900) + yy
+        return (2000 if yy <= PhotosUploader._2DY_CUTOFF else 1900) + yy
 
     def _parse_date(self, text: str) -> datetime | None:
         """Parse a user-supplied date string.  Returns a datetime or None.
@@ -1037,8 +1044,10 @@ class PhotosUploader:
             # Read IPTC tag — may be a single bytes value or a list (e.g. Keywords)
             raw = iptc.get(link['iptc_tag'], b'')
             if isinstance(raw, list):
-                # Multi-valued: decode each entry and join with ", "
-                parts = [bytes(r).decode('utf-8', errors='replace').strip()
+                # Multi-valued: decode each entry and join with ", ".
+                # Commas within a keyword are stripped because the field uses
+                # commas as its delimiter (Piwigo tags are comma-separated).
+                parts = [bytes(r).decode('utf-8', errors='replace').replace(',', '').strip()
                          for r in raw if r]
                 value = ', '.join(p for p in parts if p)
             else:
@@ -1261,7 +1270,7 @@ class PhotosUploader:
         """Validate Date of Photo; color the entry pink and gray the upload button if invalid."""
         text = self.custom_vars['date_of_photo'].get()
         parsed = self._parse_date(text)
-        valid = parsed is not None and 1926 <= parsed.year <= 2050
+        valid = parsed is not None and self._DATE_MIN_YEAR <= parsed.year <= self._DATE_MAX_YEAR
         self._field_validity['date'] = valid
         self.date_entry.config(bg='pink' if not valid else 'white')
         self._update_button_states()
@@ -1381,7 +1390,10 @@ class PhotosUploader:
         output_filename = self.custom_vars['output_filename'].get().strip() or original_filename
         author   = self.custom_vars['photo_source'].get().strip()
         comment  = self.custom_vars['comments'].get('1.0', "end").strip()
-        tags     = self.custom_vars['tags'].get().strip()
+        # Normalise tags: split on commas, strip whitespace from each token, drop blanks,
+        # then rejoin — ensures clean comma-separated input to the Piwigo API.
+        raw_tags = self.custom_vars['tags'].get()
+        tags = ', '.join(t for t in (t.strip() for t in raw_tags.split(',')) if t)
 
         # Parse and format date for Piwigo API (MySQL format: YYYY-MM-DD HH:MM:SS)
         raw_date = self.custom_vars['date_of_photo'].get().strip()
