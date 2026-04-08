@@ -1558,6 +1558,13 @@ class PhotosUploader:
         # Gather custom field values for this file (read from widgets, not saved data)
         original_filename = os.path.basename(path)
         output_filename = self.custom_vars['output_filename'].get().strip() or original_filename
+
+        # Non-JPEG source files are converted to JPEG on upload; ensure the output
+        # filename reflects that by replacing any non-JPEG extension with .jpg.
+        _out_stem, _out_ext = os.path.splitext(output_filename)
+        if _out_ext.lower() not in ('.jpg', '.jpeg'):
+            output_filename = _out_stem + '.jpg'
+            self.custom_vars['output_filename'].set(output_filename)
         author   = self.custom_vars['photo_source'].get().strip()
         comment  = self.custom_vars['comments'].get('1.0', "end").strip()
         # Normalise tags: split on commas, strip whitespace from each token, drop blanks,
