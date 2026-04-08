@@ -828,7 +828,12 @@ class PhotosUploader:
                 current_mtime = os.path.getmtime(path)
             except OSError:
                 current_mtime = None
-            if path != self._cached_image_path or current_mtime != self._cached_image_mtime:
+            # Compare mtimes as integer milliseconds to avoid floating-point
+            # rounding differences on NTFS (which has 100ns resolution but
+            # Python's os.path.getmtime() returns a float).
+            def _mtime_ms(t):
+                return None if t is None else int(t * 1000)
+            if path != self._cached_image_path or _mtime_ms(current_mtime) != _mtime_ms(self._cached_image_mtime):
                 if self._cached_image is not None:
                     self._cached_image.close()
                 self._cached_image = Image.open(path)  # type: ignore[possibly-undefined]
@@ -1354,14 +1359,19 @@ class PhotosUploader:
 
             max_pixels = params.get('max_upload_pixels')
             if max_pixels:
-                img = Image.open(path)  # type: ignore[possibly-undefined]
-                w, h = img.size
-                if w * h > max_pixels:
-                    scale = (max_pixels / (w * h)) ** 0.5
-                    new_w = max(1, int(w * scale))
-                    new_h = max(1, int(h * scale))
-                    img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
-                img.save(temp_path)
+                with Image.open(path) as src:  # type: ignore[possibly-undefined]
+                    w, h = src.size
+                    if w * h > max_pixels:
+                        scale = (max_pixels / (w * h)) ** 0.5
+                        new_w = max(1, int(w * scale))
+                        new_h = max(1, int(h * scale))
+                        resized = src.resize((new_w, new_h), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
+                        try:
+                            resized.save(temp_path)
+                        finally:
+                            resized.close()
+                    else:
+                        src.save(temp_path)
             else:
                 shutil.copy2(path, temp_path)
 
