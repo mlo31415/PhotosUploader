@@ -1063,8 +1063,8 @@ class PhotosUploader:
                    else Image.open(path))  # type: ignore[possibly-undefined]
             if img is not None:
                 iptc = IptcImagePlugin.getiptcinfo(img) or {}  # type: ignore[possibly-undefined]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not read IPTC data from {path}: {e}")
 
         for link in self._field_links:
             # Read IPTC tag — may be a single bytes value or a list (e.g. Keywords)
@@ -1489,7 +1489,12 @@ class PhotosUploader:
         progress_dlg.title("Uploading…")
         progress_dlg.resizable(False, False)
         progress_dlg.grab_set()
-        progress_dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # prevent close
+        progress_dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # discourage close via title bar
+        progress_dlg_alive = [True]  # mutable flag; set False if dialog is destroyed externally
+
+        def _on_progress_destroyed(_event=None):
+            progress_dlg_alive[0] = False
+        progress_dlg.bind("<Destroy>", _on_progress_destroyed)
         ttk.Label(progress_dlg, text=f"Uploading  {output_filename}",
                   padding=(16, 12, 16, 4)).pack()
         ttk.Label(progress_dlg, text=f"to  '{album}'",
@@ -1503,12 +1508,16 @@ class PhotosUploader:
         self._center_dialog(progress_dlg)
 
         def set_stage(msg: str):
-            self.root.after(0, lambda: progress_stage_var.set(msg))
+            def _apply():
+                if progress_dlg_alive[0]:
+                    progress_stage_var.set(msg)
+            self.root.after(0, _apply)
 
         def close_progress():
-            pbar.stop()
-            progress_dlg.grab_release()
-            progress_dlg.destroy()
+            if progress_dlg_alive[0]:
+                pbar.stop()
+                progress_dlg.grab_release()
+                progress_dlg.destroy()
 
         def worker():
             # Prepare upload copy (resize + EXIF strip) inside the thread so the
