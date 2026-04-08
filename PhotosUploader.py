@@ -957,10 +957,11 @@ class PhotosUploader:
     }
 
     # Two-digit year cutoff: yy <= _2DY_CUTOFF → 2000s, yy > _2DY_CUTOFF → 1900s.
-    # The minimum year producible from 2-digit input is therefore 1900 + (_2DY_CUTOFF + 1).
-    # _DATE_MIN_YEAR is derived from this so date validation stays in sync.
+    # e.g. "36" → 1936, "35" → 2035.  2-digit input cannot produce years before 1936.
+    # _DATE_MIN_YEAR is intentionally set earlier (1926) to allow full 4-digit years
+    # for historical photos pre-dating the 2-digit expansion range.
     _2DY_CUTOFF:    int = 35   # 00–35 → 2000–2035; 36–99 → 1936–1999
-    _DATE_MIN_YEAR: int = 1900 + _2DY_CUTOFF + 1   # = 1936
+    _DATE_MIN_YEAR: int = 1926 # earliest accepted 4-digit year
     _DATE_MAX_YEAR: int = 2000 + _2DY_CUTOFF        # = 2035
 
     @staticmethod
