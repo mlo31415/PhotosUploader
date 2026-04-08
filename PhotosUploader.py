@@ -903,6 +903,9 @@ class PhotosUploader:
         win = tk.Toplevel(self.root)
         win.title("Caption Editor")
         win.resizable(True, True)
+        win.lift()
+        win.attributes("-topmost", True)
+        win.after(100, lambda: win.attributes("-topmost", False))
 
         # ── Selectable filename heading ──────────────────────────────────────
         heading_var = tk.StringVar(value=os.path.basename(self.current_photo))
@@ -969,13 +972,17 @@ class PhotosUploader:
 
         win.protocol("WM_DELETE_WINDOW", _on_win_close)
 
-        # Size the window: 75% of screen size, centred on screen
-        sw = win.winfo_screenwidth()
-        sh = win.winfo_screenheight()
-        pw = max(500, int(sw * 0.75))
-        ph = max(400, int(sh * 0.75))
-        px = (sw - pw) // 2
-        py = (sh - ph) // 2
+        # Size the window to 75% of the main window and centre it over the main window.
+        # Using the main window's position ensures the popup appears on the same monitor.
+        self.root.update_idletasks()
+        rw = self.root.winfo_width()
+        rh = self.root.winfo_height()
+        rx = self.root.winfo_rootx()
+        ry = self.root.winfo_rooty()
+        pw = max(500, int(rw * 0.75))
+        ph = max(400, int(rh * 0.75))
+        px = rx + (rw - pw) // 2
+        py = ry + (rh - ph) // 2
         win.geometry(f"{pw}x{ph}+{px}+{py}")
 
     # -----------------------------------------------------------------------
