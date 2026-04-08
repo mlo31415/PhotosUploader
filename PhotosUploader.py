@@ -398,6 +398,7 @@ class PhotosUploader:
                                 height=200)
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.bind('<Configure>', self._on_canvas_resize)
+        self.canvas.bind('<Control-Button-1>', self._open_caption_editor)
 
         # ── Bottom pane: Custom Fields / EXIF stacked vertically ─────────
         hpane = ttk.PanedWindow(vpane, orient="vertical")
@@ -878,6 +879,98 @@ class PhotosUploader:
     def _on_canvas_resize(self, event):
         if self.current_photo:
             self._display_photo(self.current_photo)
+
+    def _open_caption_editor(self, _event=None):
+        """Open a popup showing the photo at a larger size with an editable caption.
+
+        Ctrl+click on the canvas triggers this.  Clicking anywhere on the photo
+        inside the popup closes it and writes the caption back to Custom Fields.
+        """
+        if not self.current_photo or not PIL_AVAILABLE:
+            return
+
+        # Only one caption editor at a time
+        if getattr(self, '_caption_editor_open', False):
+            return
+        self._caption_editor_open = True
+
+        win = tk.Toplevel(self.root)
+        win.title("Caption Editor")
+        win.resizable(True, True)
+
+        # ── Selectable filename heading ──────────────────────────────────────
+        heading_var = tk.StringVar(value=os.path.basename(self.current_photo))
+        heading_entry = tk.Entry(win, textvariable=heading_var, state="readonly",
+                                 readonlybackground=win.cget("bg"),
+                                 relief="flat", font=('TkDefaultFont', 10, 'bold'),
+                                 justify="center")
+        heading_entry.pack(fill="x", padx=8, pady=(8, 2))
+
+        # ── Photo canvas ────────────────────────────────────────────────────
+        photo_canvas = tk.Canvas(win, bg='#1a1a1a', cursor='hand2')
+        photo_canvas.pack(fill="both", expand=True, padx=8, pady=(2, 4))
+
+        # Keep a reference so GC doesn't collect the PhotoImage
+        _popup_image_ref = [None]
+
+        def _render_popup(event=None):
+            if self._cached_image is None:
+                return
+            cw = max(photo_canvas.winfo_width(), 100)
+            ch = max(photo_canvas.winfo_height(), 100)
+            iw, ih = self._cached_image.size
+            scale = min(cw / iw, ch / ih, 1.0)
+            tw = max(1, int(iw * scale))
+            th = max(1, int(ih * scale))
+            thumb = self._cached_image.resize(  # type: ignore[possibly-undefined]
+                (tw, th), Image.Resampling.LANCZOS)
+            _popup_image_ref[0] = ImageTk.PhotoImage(thumb)
+            photo_canvas.delete('all')
+            photo_canvas.create_image(cw // 2, ch // 2, anchor="center",
+                                      image=_popup_image_ref[0])
+
+        photo_canvas.bind('<Configure>', _render_popup)
+
+        # ── Caption text box ─────────────────────────────────────────────────
+        cap_frame = ttk.Frame(win, padding=(8, 0, 8, 8))
+        cap_frame.pack(fill="x")
+        ttk.Label(cap_frame, text="File name:").pack(side="left", padx=(0, 6))
+        cap_text = tk.Text(cap_frame, height=3, wrap="word",
+                           font=('TkDefaultFont', 10))
+        cap_text.pack(side="left", fill="x", expand=True)
+
+        # Initialise with current caption
+        current_caption = self.custom_vars['comments'].get('1.0', "end").strip()
+        cap_text.insert('1.0', current_caption)
+        cap_text.focus_set()
+
+        def _commit_and_close(_event=None):
+            new_caption = cap_text.get('1.0', "end").strip()
+            comments_widget = self.custom_vars['comments']
+            comments_widget.delete('1.0', "end")
+            if new_caption:
+                comments_widget.insert('1.0', new_caption)
+            # Trigger validation / EXIF sync via the <<Modified>> binding
+            comments_widget.edit_modified(True)
+            self._caption_editor_open = False
+            win.destroy()
+
+        photo_canvas.bind('<Button-1>', _commit_and_close)
+
+        def _on_win_close():
+            self._caption_editor_open = False
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_win_close)
+
+        # Size the window: 75% of screen size, centred on screen
+        sw = win.winfo_screenwidth()
+        sh = win.winfo_screenheight()
+        pw = max(500, int(sw * 0.75))
+        ph = max(400, int(sh * 0.75))
+        px = (sw - pw) // 2
+        py = (sh - ph) // 2
+        win.geometry(f"{pw}x{ph}+{px}+{py}")
 
     # -----------------------------------------------------------------------
     # EXIF
