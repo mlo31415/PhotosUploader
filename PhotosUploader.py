@@ -848,8 +848,6 @@ class PhotosUploader:
                     f"{self._cached_image.width} × {self._cached_image.height} px"
                     f"  |  {self._cached_image.mode}")
             img = self._cached_image
-            if img is None:
-                return
             cw = max(self.canvas.winfo_width(), 100)
             ch = max(self.canvas.winfo_height(), 100)
             # Compute scaled size preserving aspect ratio, then resize into a new
