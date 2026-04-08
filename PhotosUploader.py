@@ -165,6 +165,7 @@ class PhotosUploader:
         self.photo_image = None     # ImageTk reference
         self._cached_image = None           # PIL Image (full-size, not thumbnailed)
         self._cached_image_path = None      # path matching _cached_image
+        self._cached_image_mtime = None     # mtime of file when cached
         self.custom_data = {}       # path -> dict of custom field values
         self._field_links = []      # list of link descriptors; see _register_field_link
         self.persist_vars = {}      # {field_key: BooleanVar} for persist checkboxes
@@ -817,9 +818,14 @@ class PhotosUploader:
             self.canvas.create_text(200, 150, text="Pillow not installed", fill='white')
             return
         try:
-            if path != self._cached_image_path:
+            try:
+                current_mtime = os.path.getmtime(path)
+            except OSError:
+                current_mtime = None
+            if path != self._cached_image_path or current_mtime != self._cached_image_mtime:
                 self._cached_image = Image.open(path)  # type: ignore[possibly-undefined]
                 self._cached_image_path = path
+                self._cached_image_mtime = current_mtime
                 self.photo_dim_var.set(
                     f"{self._cached_image.width} × {self._cached_image.height} px"
                     f"  |  {self._cached_image.mode}")
@@ -838,6 +844,7 @@ class PhotosUploader:
         except Exception as e:
             self._cached_image = None
             self._cached_image_path = None
+            self._cached_image_mtime = None
             self.canvas.delete('all')
             self.canvas.create_text(10, 10, anchor="nw",
                                     text=f"Cannot display image:\n{e}",
@@ -1206,6 +1213,7 @@ class PhotosUploader:
         self.photo_image   = None
         self._cached_image = None
         self._cached_image_path = None
+        self._cached_image_mtime = None
         self.photo_label_var.set("No photo selected")
         self.photo_dim_var.set("")
         self.path_var.set("")

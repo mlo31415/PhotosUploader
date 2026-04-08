@@ -20,10 +20,12 @@ Public API
         uploading.
 """
 
+import os
 import sys
 import json
 import time
 import mimetypes
+import tempfile
 import threading
 import warnings
 import logging
@@ -428,8 +430,15 @@ def _fetch_and_save_hierarchy(client: PiwigoClient, step_cb) -> int:
     step_cb("Building hierarchy…")
     hierarchy = _build_hierarchy(flat)
     step_cb(f"Writing {_album_hierarchy_file().name}…")
-    with open(_album_hierarchy_file(), "w", encoding="utf-8") as f:
-        json.dump(hierarchy, f, indent=2, ensure_ascii=False)
+    dest = _album_hierarchy_file()
+    # Write atomically: write to a temp file in the same directory, then rename
+    # into place so a concurrent reader never sees a partial file.
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=dest.parent, suffix=".tmp", delete=False
+    ) as tmp:
+        json.dump(hierarchy, tmp, indent=2, ensure_ascii=False)
+        tmp_path = tmp.name
+    os.replace(tmp_path, dest)
     return len(flat)
 
 
