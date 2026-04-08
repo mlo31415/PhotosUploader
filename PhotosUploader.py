@@ -1464,12 +1464,19 @@ class PhotosUploader:
         DownloadAlbumStructure.record_uploaded_file(
             filename, album_fullname, album_id=album_id, file_id=file_id)
 
+    # JPEG file extensions (used to decide whether format conversion is needed)
+    _JPEG_EXTENSIONS: frozenset[str] = frozenset({'.jpg', '.jpeg', '.jpe', '.jfif'})
+
     def _prepare_upload_copy(self, path: str, params: dict) -> str | None:
-        """Create a temp copy of the file for upload, optionally resized and with EXIF stripped.
+        """Create a temp copy of the file for upload, optionally converted to JPEG,
+        resized, and with EXIF stripped.
+
+        Non-JPEG images are converted to JPEG so Piwigo always receives a format it
+        handles well.  The original file is never modified.
 
         If 'max_upload_pixels' is set in params (e.g. 2000000 for 2 MP), the image is
         downsampled so that width*height does not exceed that value.  Aspect ratio is
-        preserved.  The original file is never modified.
+        preserved.
 
         Returns the path to the temp file, or None if preparation fails (caller should
         fall back to the original file).  Caller is responsible for deleting the temp file.
@@ -1479,29 +1486,39 @@ class PhotosUploader:
 
         try:
             _, ext = os.path.splitext(path)
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            is_jpeg = ext.lower() in self._JPEG_EXTENSIONS
+            out_ext = ext if is_jpeg else '.jpg'
+
+            with tempfile.NamedTemporaryFile(suffix=out_ext, delete=False) as tmp:
                 temp_path = tmp.name
 
+            save_kwargs = {} if is_jpeg else {'format': 'JPEG', 'quality': 92}
+
             max_pixels = params.get('max_upload_pixels')
-            if max_pixels:
-                with Image.open(path) as src:  # type: ignore[possibly-undefined]
-                    w, h = src.size
-                    if w * h > max_pixels:
+            with Image.open(path) as src:  # type: ignore[possibly-undefined]
+                # Convert palette/transparency modes that JPEG can't handle
+                img = src
+                if not is_jpeg and src.mode not in ('RGB', 'L'):
+                    img = src.convert('RGB')  # type: ignore[possibly-undefined]
+                try:
+                    w, h = img.size
+                    if max_pixels and w * h > max_pixels:
                         scale = (max_pixels / (w * h)) ** 0.5
                         new_w = max(1, int(w * scale))
                         new_h = max(1, int(h * scale))
-                        resized = src.resize((new_w, new_h), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
+                        resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
                         try:
-                            resized.save(temp_path)
+                            resized.save(temp_path, **save_kwargs)
                         finally:
                             resized.close()
                     else:
-                        src.save(temp_path)
-            else:
-                shutil.copy2(path, temp_path)
+                        img.save(temp_path, **save_kwargs)
+                finally:
+                    if img is not src:
+                        img.close()
 
-            # Strip EXIF from temp copy
-            if PIEXIF_AVAILABLE:
+            # Strip EXIF from temp copy (piexif only works on JPEG)
+            if PIEXIF_AVAILABLE and out_ext.lower() in self._JPEG_EXTENSIONS:
                 try:
                     piexif.insert(piexif.dump({}), temp_path)
                 except Exception:
