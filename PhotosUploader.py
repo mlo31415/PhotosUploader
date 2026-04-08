@@ -157,6 +157,71 @@ def parse_dnd_paths(data: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Field tooltip — shows a message when the cursor hovers over an invalid field
+# ---------------------------------------------------------------------------
+class _FieldTooltip:
+    """Displays a small tooltip window when the cursor rests over a widget.
+
+    Call enable(msg) to arm it and disable() to suppress it.  The tooltip
+    only appears while armed, so validators control visibility by calling
+    enable/disable each time validity changes.
+    """
+    _DELAY_MS = 600  # pause before tooltip appears
+
+    def __init__(self, widget: tk.Widget):
+        self._widget = widget
+        self._msg: str | None = None
+        self._after_id = None
+        self._tip_win: tk.Toplevel | None = None
+        widget.bind('<Enter>', self._on_enter, add='+')
+        widget.bind('<Leave>', self._on_leave, add='+')
+
+    def enable(self, msg: str):
+        self._msg = msg
+
+    def disable(self):
+        self._msg = None
+        self._hide()
+
+    def _on_enter(self, _event=None):
+        if not self._msg:
+            return
+        self._cancel_pending()
+        self._after_id = self._widget.after(self._DELAY_MS, self._show)
+
+    def _on_leave(self, _event=None):
+        self._cancel_pending()
+        self._hide()
+
+    def _cancel_pending(self):
+        if self._after_id is not None:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if not self._msg:
+            return
+        self._hide()
+        x = self._widget.winfo_rootx() + 10
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        win = tk.Toplevel(self._widget)
+        win.wm_overrideredirect(True)
+        win.wm_geometry(f"+{x}+{y}")
+        tk.Label(win, text=self._msg, justify="left",
+                 background="#ffffe0", relief="solid", borderwidth=1,
+                 font=('TkDefaultFont', 9), padx=6, pady=3).pack()
+        self._tip_win = win
+
+    def _hide(self):
+        if self._tip_win is not None:
+            try:
+                self._tip_win.destroy()
+            except Exception:
+                pass
+            self._tip_win = None
+
+
+# ---------------------------------------------------------------------------
 # Main Application
 # ---------------------------------------------------------------------------
 class PhotosUploader:
@@ -188,6 +253,10 @@ class PhotosUploader:
             self.upload_album_id = int(self.state_data["upload_album_id"])
 
         self._build_ui()
+        # Attach tooltips to the three validated fields (widgets exist after _build_ui)
+        self._tt_filename = _FieldTooltip(self.output_filename_entry)
+        self._tt_date     = _FieldTooltip(self.date_entry)
+        self._tt_caption  = _FieldTooltip(self.custom_vars['comments'])
         # Trigger the album label to render with the restored album name.
         # The trace is only wired up inside _build_ui, so a write before that
         # call would be silently ignored — fire it explicitly now.
@@ -213,6 +282,7 @@ class PhotosUploader:
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=6)
         ttk.Button(toolbar, text="Download Album Hierarchy", command=self._download_album_hierarchy).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Download File List", command=self._download_file_list).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="Exit", command=self._on_close).pack(side="right", padx=2)
 
         # ── Main three-panel area ─────────────────────────────────────────
         main_pane = ttk.PanedWindow(self.root, orient="horizontal")
@@ -716,7 +786,8 @@ class PhotosUploader:
             self.upload_album_id = album_id
             self.upload_album_var.set(fullname)
             self.set_status(f"Upload album set to: {fullname}")
-        DownloadAlbumStructure.pick_album(self.root, self.set_status, on_select)
+        DownloadAlbumStructure.pick_album(self.root, self.set_status, on_select,
+                                          title="Select Upload Album")
 
     # -----------------------------------------------------------------------
     # Photo selection & display
@@ -943,7 +1014,7 @@ class PhotosUploader:
         # ── Caption text box ─────────────────────────────────────────────────
         cap_frame = ttk.Frame(win, padding=(8, 0, 8, 8))
         cap_frame.pack(fill="x")
-        ttk.Label(cap_frame, text="File name:").pack(side="left", padx=(0, 6))
+        ttk.Label(cap_frame, text="Caption:").pack(side="left", padx=(0, 6))
         cap_text = tk.Text(cap_frame, height=3, wrap="word",
                            font=('TkDefaultFont', 10))
         cap_text.pack(side="left", fill="x", expand=True)
@@ -1378,19 +1449,22 @@ class PhotosUploader:
     # Utilities
     # -----------------------------------------------------------------------
     def _validate_output_filename_field(self):
-        """Require a legal filename with a recognised image extension; update bg and button state."""
+        """Turn the field pink and block upload if the filename is illegal or lacks a valid image extension."""
         name = self.custom_vars['output_filename'].get().strip()
         _, dot_ext = os.path.splitext(name)
-        ext = dot_ext.lstrip('.').lower()
         valid = (
             bool(name)
             and not self._ILLEGAL_FILENAME_CHARS.search(name)
             and not self._RESERVED_NAMES.match(name)
             and not name.endswith('.')
-            and ('.' + ext) in IMAGE_EXTENSIONS
+            and dot_ext.lower() in IMAGE_EXTENSIONS
         )
         self._field_validity['filename'] = valid
         self.output_filename_entry.config(bg='pink' if not valid else 'white')
+        if not valid:
+            self._tt_filename.enable("Invalid filename or non-image file extension.")
+        else:
+            self._tt_filename.disable()
         self._update_button_states()
 
     def _validate_caption_field(self):
@@ -1400,6 +1474,10 @@ class PhotosUploader:
         valid = len(value) > 0
         self._field_validity['caption'] = valid
         widget.config(bg='pink' if not valid else 'white')
+        if not valid:
+            self._tt_caption.enable("Caption is required.")
+        else:
+            self._tt_caption.disable()
         self._update_button_states()
 
     def _validate_date_field(self):
@@ -1409,6 +1487,10 @@ class PhotosUploader:
         valid = parsed is not None and self._DATE_MIN_YEAR <= parsed.year <= self._DATE_MAX_YEAR
         self._field_validity['date'] = valid
         self.date_entry.config(bg='pink' if not valid else 'white')
+        if not valid:
+            self._tt_date.enable("Missing date or date has invalid format.")
+        else:
+            self._tt_date.disable()
         self._update_button_states()
 
     def _update_button_states(self):
@@ -1596,33 +1678,6 @@ class PhotosUploader:
             )
             if not proceed:
                 self.set_status(f"Upload cancelled: {output_filename} already exists on Piwigo.")
-                return
-
-        # Rename the file if output filename differs from current name
-        _, current_ext = os.path.splitext(original_filename)
-        if output_filename and output_filename != original_filename:
-            _, out_ext = os.path.splitext(output_filename)
-            new_name = output_filename if out_ext else output_filename + current_ext
-            new_path = os.path.join(os.path.dirname(path), new_name)
-            if os.path.exists(new_path) and new_path != path:
-                messagebox.showwarning(
-                    "Rename Failed",
-                    f'Cannot rename to "{new_name}": a file with that name already exists.',
-                    parent=self.root,
-                )
-                self.set_status("Upload blocked: rename target already exists.")
-                return
-            try:
-                os.rename(path, new_path)
-                path = new_path
-                self.current_photo = new_path
-            except Exception as e:
-                messagebox.showwarning(
-                    "Rename Failed",
-                    f'Could not rename "{original_filename}" to "{new_name}":\n{e}',
-                    parent=self.root,
-                )
-                self.set_status("Upload blocked: rename failed.")
                 return
 
         self.set_status(f"Uploading {output_filename}…")

@@ -830,7 +830,8 @@ def _hierarchy_is_fresh() -> bool:
     return (time.time() - _album_hierarchy_file().stat().st_mtime) < 86400
 
 
-def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
+def pick_album(parent: tk.Widget, set_status_cb, on_select_cb,
+               title: str = "Select Album"):
     """Show an album picker, auto-refreshing the hierarchy first if stale.
 
     on_select_cb(album_id: int, fullname: str) is called when the user
@@ -846,7 +847,7 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
                                  f"Cannot read album hierarchy:\n{exc}",
                                  parent=parent)
             return
-        _show_picker_dialog(parent, hierarchy, on_select_cb)
+        _show_picker_dialog(parent, hierarchy, on_select_cb, title)
 
     if _hierarchy_is_fresh():
         open_picker()
@@ -914,10 +915,11 @@ def pick_album(parent: tk.Widget, set_status_cb, on_select_cb):
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
+def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb,
+                        title: str = "Select Album"):
     """Render the album-tree picker dialog (RV Menu Tree style)."""
     dlg = tk.Toplevel(parent)
-    dlg.title("Select Upload Album")
+    dlg.title(title)
     dlg.grab_set()
 
     dlg.geometry("440x580")
@@ -999,6 +1001,7 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
         sel_var.set(fullname_by_iid.get(sel[0], "(none)") if sel else "(none)")
 
     tree.bind("<<TreeviewSelect>>", _on_tree_select)
+    tree.bind("<Double-1>", lambda e: on_select())
 
     # ── Buttons ──────────────────────────────────────────────────────────────
     btn_frame = ttk.Frame(dlg, padding=(8, 0, 8, 10))
