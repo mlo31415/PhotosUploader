@@ -400,6 +400,12 @@ class PhotosUploader:
         self.canvas.bind('<Configure>', self._on_canvas_resize)
         self.canvas.bind('<Control-Button-1>', self._open_caption_editor)
 
+        def _enforce_canvas_min_width(event):
+            min_w = int(event.width * 0.60)
+            if self.canvas.winfo_width() < min_w:
+                self.canvas.configure(width=min_w)
+        viewer_frame.bind('<Configure>', _enforce_canvas_min_width)
+
         # ── Bottom pane: Custom Fields / EXIF stacked vertically ─────────
         hpane = ttk.PanedWindow(vpane, orient="vertical")
         vpane.add(hpane, weight=17)
