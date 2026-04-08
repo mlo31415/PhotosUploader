@@ -56,7 +56,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # State persistence
 # ---------------------------------------------------------------------------
-STATE_FILE = DownloadAlbumStructure.get_data_dir() / "PhotosUploader State.json"
+def _state_file() -> Path:
+    return DownloadAlbumStructure.get_data_dir() / "PhotosUploader State.json"
 
 
 def _window_is_on_a_monitor(hwnd: int) -> bool:
@@ -70,17 +71,18 @@ def _window_is_on_a_monitor(hwnd: int) -> bool:
 
 
 def load_state() -> dict[str, Any]:
-    if STATE_FILE.exists():
+    sf = _state_file()
+    if sf.exists():
         try:
-            with open(STATE_FILE, encoding='utf-8') as f:
+            with open(sf, encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            logger.warning(f"Could not load state file {STATE_FILE}: {e} — starting with defaults.")
+            logger.warning(f"Could not load state file {sf}: {e} — starting with defaults.")
     return {}
 
 
 def save_state(state: dict[str, Any]) -> None:
-    with open(STATE_FILE, "w", encoding='utf-8') as f:
+    with open(_state_file(), "w", encoding='utf-8') as f:
         json.dump(state, f, indent=2)
 
 
