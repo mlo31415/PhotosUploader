@@ -485,8 +485,13 @@ def _fetch_and_save_file_index(client: PiwigoClient, flat_albums: list,
             if not any(e["album_id"] == cat_id for e in entries):
                 entries.append(entry)
 
-    with open(_file_index_file(), "w", encoding="utf-8") as f:
-        json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
+    dest = _file_index_file()
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=dest.parent, suffix=".tmp", delete=False
+    ) as tmp:
+        json.dump(index, tmp, indent=2, ensure_ascii=False, sort_keys=True)
+        tmp_path = tmp.name
+    os.replace(tmp_path, dest)
 
     return index
 
@@ -1138,5 +1143,10 @@ def record_uploaded_file(filename: str, album_fullname: str,
                         "album_id": album_id,
                         "file_id":  file_id})
 
-    with open(_file_index_file(), "w", encoding="utf-8") as f:
-        json.dump(index, f, indent=2, ensure_ascii=False, sort_keys=True)
+    dest = _file_index_file()
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=dest.parent, suffix=".tmp", delete=False
+    ) as tmp:
+        json.dump(index, tmp, indent=2, ensure_ascii=False, sort_keys=True)
+        tmp_path = tmp.name
+    os.replace(tmp_path, dest)

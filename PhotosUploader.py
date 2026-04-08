@@ -82,8 +82,13 @@ def load_state() -> dict[str, Any]:
 
 
 def save_state(state: dict[str, Any]) -> None:
-    with open(_state_file(), "w", encoding='utf-8') as f:
-        json.dump(state, f, indent=2)
+    dest = _state_file()
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=dest.parent, suffix=".tmp", delete=False
+    ) as tmp:
+        json.dump(state, tmp, indent=2)
+        tmp_path = tmp.name
+    os.replace(tmp_path, dest)
 
 
 # ---------------------------------------------------------------------------
