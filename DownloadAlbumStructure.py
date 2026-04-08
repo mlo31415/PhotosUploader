@@ -974,7 +974,9 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
             if q in name_lower:
                 tree.selection_set(iid)
                 tree.see(iid)
-                break
+                return
+        # No match — clear any stale selection so the UI isn't misleading
+        tree.selection_remove(tree.selection())
 
     filter_var.trace_add("write", _on_filter)
 
@@ -1006,6 +1008,8 @@ def _show_picker_dialog(parent: tk.Widget, hierarchy: list, on_select_cb):
             messagebox.showwarning("No album selected",
                                    "Please select an album first.",
                                    parent=dlg)
+            dlg.lift()
+            dlg.focus_set()
             return
         album_id  = int(sel[0])
         fullname  = fullname_by_iid.get(sel[0], "")
