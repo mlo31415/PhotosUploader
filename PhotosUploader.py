@@ -183,6 +183,10 @@ class PhotosUploader:
             self.upload_album_id = int(self.state_data["upload_album_id"])
 
         self._build_ui()
+        # Trigger the album label to render with the restored album name.
+        # The trace is only wired up inside _build_ui, so a write before that
+        # call would be silently ignored — fire it explicitly now.
+        self.upload_album_var.set(self.upload_album_var.get())
         self._validate_caption_field()         # start pink since caption is empty
         self._validate_date_field()            # start pink since date is empty
         self._validate_output_filename_field() # start pink since filename is empty
@@ -925,7 +929,8 @@ class PhotosUploader:
                         val = f"{val[0]}/{val[1]} ({val[0]/val[1]:.4f})"
                     display_tag = EXIF_TAG_NAMES.get(tag, tag)
                     self._exif_data[display_tag] = str(val)
-                    self.exif_tree.insert('', "end", values=(display_tag, str(val)[:120]))
+                    s = str(val)
+                    self.exif_tree.insert('', "end", values=(display_tag, s[:120] + '…' if len(s) > 120 else s))
             else:
                 self.exif_tree.insert('', "end", values=('(No EXIF data)', ''))
         except Exception as e:
@@ -1098,7 +1103,8 @@ class PhotosUploader:
         self.exif_tree.delete(*self.exif_tree.get_children())
         reselect_iid = None
         for key, val in self._exif_data.items():
-            iid = self.exif_tree.insert('', "end", values=(key, str(val)[:120]))
+            s = str(val)
+            iid = self.exif_tree.insert('', "end", values=(key, s[:120] + '…' if len(s) > 120 else s))
             if key == reselect_key:
                 reselect_iid = iid
         if reselect_iid:
