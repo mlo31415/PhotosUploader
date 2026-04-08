@@ -199,6 +199,7 @@ class PhotosUploader:
         self.root.update_idletasks()
         self._restore_geometry()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.after(100, self._set_initial_sash_positions)
 
     # -----------------------------------------------------------------------
     # UI Construction
@@ -283,13 +284,14 @@ class PhotosUploader:
     def _build_center_panel(self, parent) -> ttk.Frame:
         frame = ttk.Frame(parent)
 
-        # Vertical paned window: viewer (top, smaller) / fields row (bottom)
+        # Vertical paned window: viewer (top, larger) / fields row (bottom)
         vpane = ttk.PanedWindow(frame, orient="vertical")
         vpane.pack(fill="both", expand=True)
+        self._center_vpane = vpane
 
         # ── Photo display (top pane) ──────────────────────────────────────
         viewer_frame = ttk.LabelFrame(vpane, text="Photo Viewer", padding=4)
-        vpane.add(viewer_frame, weight=1)
+        vpane.add(viewer_frame, weight=13)
 
         # ── Top bar: Album selection ───────────────────────────────────────
         top_bar = ttk.Frame(viewer_frame)
@@ -399,11 +401,12 @@ class PhotosUploader:
 
         # ── Bottom pane: Custom Fields / EXIF stacked vertically ─────────
         hpane = ttk.PanedWindow(vpane, orient="vertical")
-        vpane.add(hpane, weight=2)
+        vpane.add(hpane, weight=17)
+        self._center_hpane = hpane
 
         # ── Custom Fields (left) ──────────────────────────────────────────
         custom_frame = ttk.LabelFrame(hpane, text="Custom Fields", padding=6)
-        hpane.add(custom_frame, weight=1)
+        hpane.add(custom_frame, weight=9)
 
         # "Persist" label above the checkbox column
         ttk.Label(custom_frame, text="Persist", anchor="center").grid(
@@ -481,7 +484,7 @@ class PhotosUploader:
 
         # ── EXIF / Metadata (right) ───────────────────────────────────────
         exif_frame = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
-        hpane.add(exif_frame, weight=1)
+        hpane.add(exif_frame, weight=8)
 
         # Edit row packed first (side=BOTTOM) so the tree fills remaining space
         edit_row = ttk.Frame(exif_frame)
@@ -503,8 +506,8 @@ class PhotosUploader:
         exif_scroll.config(command=self.exif_tree.yview)
         self.exif_tree.heading('key', text='Field')
         self.exif_tree.heading('value', text='Value')
-        self.exif_tree.column('key', width=160)
-        self.exif_tree.column('value', width=260)
+        self.exif_tree.column('key',   width=160, minwidth=80,  stretch=False)
+        self.exif_tree.column('value', width=260, minwidth=100, stretch=True)
         self.exif_tree.pack(side="left", fill="both", expand=True)
         exif_scroll.pack(side="left", fill="y")
         self.exif_tree.bind('<<TreeviewSelect>>', self._on_exif_select)
@@ -1315,6 +1318,18 @@ class PhotosUploader:
     def _update_counts(self):
         self.input_count_var.set(f"{len(self.input_paths)} items")
         self._update_button_states()
+
+    def _set_initial_sash_positions(self):
+        """Set sash positions so viewer gets ~43%, custom fields ~30%, EXIF ~27%."""
+        total = self._center_vpane.winfo_height()
+        if total < 50:
+            # Window not yet fully rendered — retry shortly
+            self.root.after(50, self._set_initial_sash_positions)
+            return
+        viewer_h = round(total * 13 / 30)
+        self._center_vpane.sashpos(0, viewer_h)
+        hpane_h = total - viewer_h
+        self._center_hpane.sashpos(0, round(hpane_h * 9 / 17))
 
     def _center_dialog(self, dlg: tk.Toplevel):
         """Centre dlg over the main window."""
