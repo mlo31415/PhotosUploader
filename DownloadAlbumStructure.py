@@ -333,6 +333,15 @@ class PiwigoClient:
         logger.info(f"[sync] pwg.categories.refreshRepresentative category_id={category_id}")
         self._call("pwg.categories.refreshRepresentative", {"cat_id": category_id})
 
+    def get_image_info(self, image_id: int) -> dict:
+        """Return info for a single image including its categories list."""
+        return self._call("pwg.images.getInfo", {"image_id": image_id})
+
+    def set_image_categories(self, image_id: int, category_ids: list[int]) -> None:
+        """Replace all category associations for an image."""
+        cats = ";".join(str(c) for c in category_ids)
+        self._call("pwg.images.setInfo", {"image_id": image_id, "categories": cats})
+
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
 

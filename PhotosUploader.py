@@ -469,6 +469,7 @@ class PhotosUploader:
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.bind('<Configure>', self._on_canvas_resize)
         self.canvas.bind('<Control-Button-1>', self._open_caption_editor)
+        self.canvas.bind('<Double-Button-1>',  self._open_caption_editor)
 
         def _enforce_canvas_min_width(event):
             min_w = int(event.width * 0.60)
@@ -1037,11 +1038,7 @@ class PhotosUploader:
 
         photo_canvas.bind('<Button-1>', _commit_and_close)
 
-        def _on_win_close():
-            self._caption_editor_open = False
-            win.destroy()
-
-        win.protocol("WM_DELETE_WINDOW", _on_win_close)
+        win.protocol("WM_DELETE_WINDOW", _commit_and_close)
 
         # Size the window to 75% of the main window and centre it over the main window.
         # Using the main window's position ensures the popup appears on the same monitor.
@@ -1186,6 +1183,11 @@ class PhotosUploader:
             except ValueError:
                 pass
 
+        # IPTC native: YYYYMMDD (no separators)
+        m = re.fullmatch(r'(\d{4})(\d{2})(\d{2})', text)
+        if m:
+            return make(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
         # mm/dd/yyyy  or  mm-dd-yyyy  (with optional 2-digit year)
         m = re.fullmatch(r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4}|\d{2})', text)
         if m:
@@ -1256,6 +1258,11 @@ class PhotosUploader:
                 value = ', '.join(p for p in parts if p)
             else:
                 value = bytes(raw).decode('utf-8', errors='replace').strip() if raw else ''
+
+            # Normalise IPTC DateCreated (YYYYMMDD → YYYY:MM:DD) so it is
+            # consistent with EXIF format and parseable by _validate_date_field.
+            if link['custom_key'] == 'date_of_photo' and re.fullmatch(r'\d{8}', value):
+                value = f"{value[:4]}:{value[4:6]}:{value[6:8]}"
 
             # Fall back to EXIF if IPTC tag is absent and an EXIF key is defined
             if not value and link['exif_key'] is not None:
