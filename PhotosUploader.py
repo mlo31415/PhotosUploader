@@ -238,6 +238,10 @@ class PhotosUploader:
         self._cached_image = None           # PIL Image (full-size, not thumbnailed)
         self._cached_image_path = None      # path matching _cached_image
         self._cached_image_mtime = None     # mtime of file when cached
+        self._crop_start:         tuple | None = None
+        self._crop_rect_id:       int   | None = None
+        self._photo_display_rect: tuple | None = None  # (x0,y0,x1,y1) on canvas
+        self._edit_history:       list        = []     # stack of PIL Images for undo
         self.custom_data = {}       # path -> dict of custom field values
         self._field_links = []      # list of link descriptors; see _register_field_link
         self.persist_vars = {}      # {field_key: BooleanVar} for persist checkboxes
@@ -467,9 +471,13 @@ class PhotosUploader:
         self.canvas = tk.Canvas(viewer_frame, bg='#1a1a1a', cursor='crosshair',
                                 height=200)
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.canvas.bind('<Configure>', self._on_canvas_resize)
+        self.canvas.bind('<Configure>',        self._on_canvas_resize)
         self.canvas.bind('<Control-Button-1>', self._open_caption_editor)
         self.canvas.bind('<Double-Button-1>',  self._open_caption_editor)
+        self.canvas.bind('<Button-1>',         self._on_crop_start)
+        self.canvas.bind('<B1-Motion>',        self._on_crop_drag)
+        self.canvas.bind('<ButtonRelease-1>',  self._on_crop_release)
+        self.canvas.bind('<Escape>',           self._clear_crop_rect)
 
         def _enforce_canvas_min_width(event):
             min_w = int(event.width * 0.60)
@@ -477,9 +485,32 @@ class PhotosUploader:
                 self.canvas.configure(width=min_w)
         viewer_frame.bind('<Configure>', _enforce_canvas_min_width)
 
-        # ── Bottom pane: Custom Fields / EXIF stacked vertically ─────────
-        hpane = ttk.PanedWindow(vpane, orient="vertical")
-        vpane.add(hpane, weight=17)
+        # ── Bottom pane: Rotate section + Custom Fields / EXIF ───────────
+        bottom_container = ttk.Frame(vpane)
+        vpane.add(bottom_container, weight=17)
+
+        rotate_frame = ttk.LabelFrame(bottom_container, text="Edit Photo", padding=4)
+        rotate_frame.pack(fill="x", pady=(0, 4))
+        ttk.Label(rotate_frame, text="Rotate:").pack(side="left", padx=(0, 6))
+        self.rotate_right_btn = ttk.Button(rotate_frame, text="↻ 90° Right",
+                   command=lambda: self._rotate_photo_viewer(90), state="disabled")
+        self.rotate_right_btn.pack(side="left", padx=2)
+        self.rotate_left_btn = ttk.Button(rotate_frame, text="↺ 90° Left",
+                   command=lambda: self._rotate_photo_viewer(-90), state="disabled")
+        self.rotate_left_btn.pack(side="left", padx=2)
+        self.rotate_180_btn = ttk.Button(rotate_frame, text="↷ 180°",
+                   command=lambda: self._rotate_photo_viewer(180), state="disabled")
+        self.rotate_180_btn.pack(side="left", padx=2)
+        ttk.Label(rotate_frame, text="      ").pack(side="left")   # gap
+        self.crop_btn = ttk.Button(rotate_frame, text="Crop",
+                   command=self._crop_photo_viewer, state="disabled")
+        self.crop_btn.pack(side="left", padx=2)
+        self.undo_btn = ttk.Button(rotate_frame, text="Undo",
+                   command=self._undo_edit_viewer, state="disabled")
+        self.undo_btn.pack(side="left", padx=2)
+
+        hpane = ttk.PanedWindow(bottom_container, orient="vertical")
+        hpane.pack(fill="both", expand=True)
         self._center_hpane = hpane
 
         # ── Custom Fields (left) ──────────────────────────────────────────
@@ -904,6 +935,9 @@ class PhotosUploader:
         self._validate_caption_field()
         self._validate_date_field()
         self._validate_output_filename_field()
+        self.rotate_right_btn.config(state="normal")
+        self.rotate_left_btn.config(state="normal")
+        self.rotate_180_btn.config(state="normal")
 
     def _display_photo(self, path: str):
         if not PIL_AVAILABLE:
@@ -939,6 +973,10 @@ class PhotosUploader:
             tw, th = max(1, int(iw * scale)), max(1, int(ih * scale))
             thumb = img.resize((tw, th), Image.Resampling.LANCZOS)  # type: ignore[possibly-undefined]
             self.photo_image = ImageTk.PhotoImage(thumb)
+            ix = cw // 2 - tw // 2
+            iy = ch // 2 - th // 2
+            self._photo_display_rect = (ix, iy, ix + tw, iy + th)
+            self._crop_rect_id = None   # canvas.delete('all') below removes it
             self.canvas.delete('all')
             self.canvas.create_image(cw // 2, ch // 2,
                                      anchor="center",
@@ -949,6 +987,8 @@ class PhotosUploader:
             self._cached_image = None
             self._cached_image_path = None
             self._cached_image_mtime = None
+            self._photo_display_rect = None
+            self._crop_rect_id = None
             self.canvas.delete('all')
             self.canvas.create_text(10, 10, anchor="nw",
                                     text=f"Cannot display image:\n{e}",
@@ -957,6 +997,121 @@ class PhotosUploader:
     def _on_canvas_resize(self, event):
         if self.current_photo:
             self._display_photo(self.current_photo)
+
+    def _rotate_photo_viewer(self, degrees: int):
+        """Rotate the displayed photo clockwise by degrees (90, -90, or 180)."""
+        if self._cached_image is None or not self.current_photo:
+            return
+        self._clear_crop_rect()
+        self._edit_history.append(self._cached_image.copy())
+        self.undo_btn.config(state="normal")
+        img = self._cached_image
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        # PIL rotates counter-clockwise, so negate for clockwise behaviour
+        self._cached_image = img.rotate(-degrees, expand=True)
+        # Keep path/mtime so _display_photo uses the modified in-memory image
+        self._display_photo(self.current_photo)
+        direction = "right" if degrees == 90 else ("left" if degrees == -90 else "180°")
+        self.set_status(f"Rotated {direction}")
+
+    # ── Crop drag / apply ────────────────────────────────────────────────────
+
+    def _on_crop_start(self, event):
+        r = self._photo_display_rect
+        if r is None:
+            self._crop_start = None
+            return
+        px0, py0, px1, py1 = r
+        if event.x < px0 or event.x > px1 or event.y < py0 or event.y > py1:
+            self._crop_start = None
+            return
+        self._clear_crop_rect()
+        self._crop_start = (event.x, event.y)
+
+    def _on_crop_drag(self, event):
+        if self._crop_start is None:
+            return
+        r = self._photo_display_rect
+        if r is None:
+            return
+        px0, py0, px1, py1 = r
+        cx = max(px0, min(event.x, px1))
+        cy = max(py0, min(event.y, py1))
+        if self._crop_rect_id is not None:
+            self.canvas.delete(self._crop_rect_id)
+        sx, sy = self._crop_start
+        self._crop_rect_id = self.canvas.create_rectangle(
+            sx, sy, cx, cy, outline="red", width=2)
+
+    def _on_crop_release(self, event):
+        if self._crop_start is None:
+            return
+        r = self._photo_display_rect
+        if r is None:
+            return
+        px0, py0, px1, py1 = r
+        cx = max(px0, min(event.x, px1))
+        cy = max(py0, min(event.y, py1))
+        sx, sy = self._crop_start
+        self._crop_start = None
+        if abs(cx - sx) < 4 or abs(cy - sy) < 4:
+            self._clear_crop_rect()
+            return
+        if self._crop_rect_id is not None:
+            self.canvas.delete(self._crop_rect_id)
+        self._crop_rect_id = self.canvas.create_rectangle(
+            min(sx, cx), min(sy, cy), max(sx, cx), max(sy, cy),
+            outline="red", width=2)
+        self.crop_btn.config(state="normal")
+        self.set_status("Crop region selected — click Crop to apply, Esc to cancel.")
+
+    def _clear_crop_rect(self, _event=None):
+        if self._crop_rect_id is not None:
+            self.canvas.delete(self._crop_rect_id)
+            self._crop_rect_id = None
+        self._crop_start = None
+        self.crop_btn.config(state="disabled")
+
+    def _crop_photo_viewer(self):
+        if self._cached_image is None or self._crop_rect_id is None:
+            return
+        r = self._photo_display_rect
+        if r is None:
+            return
+        coords = self.canvas.coords(self._crop_rect_id)
+        if not coords or len(coords) < 4:
+            return
+        cx0, cy0, cx1, cy1 = [int(v) for v in coords]
+        cx0, cx1 = min(cx0, cx1), max(cx0, cx1)
+        cy0, cy1 = min(cy0, cy1), max(cy0, cy1)
+        px0, py0, px1, py1 = r
+        pw, ph = px1 - px0, py1 - py0
+        iw, ih = self._cached_image.size
+        ix0 = max(0, int((cx0 - px0) / pw * iw))
+        iy0 = max(0, int((cy0 - py0) / ph * ih))
+        ix1 = min(iw, int((cx1 - px0) / pw * iw))
+        iy1 = min(ih, int((cy1 - py0) / ph * ih))
+        if ix1 <= ix0 or iy1 <= iy0:
+            self.set_status("Crop region too small.")
+            return
+        self._edit_history.append(self._cached_image.copy())
+        self.undo_btn.config(state="normal")
+        self._cached_image = self._cached_image.crop((ix0, iy0, ix1, iy1))
+        self._clear_crop_rect()
+        self._display_photo(self.current_photo)
+        self.set_status(f"Cropped to {ix1 - ix0}\u00d7{iy1 - iy0} px")
+
+    def _undo_edit_viewer(self):
+        """Revert the last rotate or crop operation."""
+        if not self._edit_history:
+            return
+        self._cached_image = self._edit_history.pop()
+        self._clear_crop_rect()
+        self._display_photo(self.current_photo)
+        if not self._edit_history:
+            self.undo_btn.config(state="disabled")
+        self.set_status("Undo applied.")
 
     def _open_caption_editor(self, _event=None):
         """Open a popup showing the photo at a larger size with an editable caption.
@@ -1437,6 +1592,15 @@ class PhotosUploader:
         self._cached_image = None
         self._cached_image_path = None
         self._cached_image_mtime = None
+        self.rotate_right_btn.config(state="disabled")
+        self.rotate_left_btn.config(state="disabled")
+        self.rotate_180_btn.config(state="disabled")
+        self.crop_btn.config(state="disabled")
+        self.undo_btn.config(state="disabled")
+        self._edit_history.clear()
+        self._photo_display_rect = None
+        self._crop_rect_id = None
+        self._crop_start = None
         self.photo_label_var.set("No photo selected")
         self.photo_dim_var.set("")
         self.path_var.set("")
@@ -1853,6 +2017,7 @@ class PhotosUploader:
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
         self.root.bind('<Control-u>', lambda e: self._upload_current_photo())
+        self.root.bind('<Control-z>', lambda e: self._undo_edit_viewer())
 
 
 # ---------------------------------------------------------------------------
