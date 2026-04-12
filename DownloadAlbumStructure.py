@@ -240,19 +240,26 @@ class PiwigoClient:
 
     def upload_image(self, path: str, category_id: int, name: str = '',
                      author: str = '', comment: str = '',
-                     tags: str = '', date_creation: str = '') -> dict:
+                     tags: str = '', date_creation: str = '',
+                     image_id: int = None) -> dict:
         """Upload a single image file to Piwigo via pwg.images.addSimple.
+
+        If image_id is supplied the existing image record is replaced in-place
+        (file + metadata updated).  Without it a new image is created.
 
         Returns the API result dict which contains 'image_id' on success.
         """
         self._apply_rate_limit()
         filename = path.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
-        logger.info(f"[upload] uploading {filename} to category_id {category_id}")
+        logger.info(f"[upload] uploading {filename} to category_id {category_id}"
+                    + (f" (replace image_id={image_id})" if image_id else ""))
         data = {
             'method':   'pwg.images.addSimple',
             'category': str(category_id),
             'level':    '0',   # 0 = public; omitting this can leave the image hidden
         }
+        if image_id:
+            data['image_id'] = str(image_id)
         if name:
             data['name'] = name
         if author:
@@ -337,10 +344,31 @@ class PiwigoClient:
         """Return info for a single image including its categories list."""
         return self._call("pwg.images.getInfo", {"image_id": image_id})
 
+    def set_image_metadata(self, image_id: int, author: str = '', comment: str = '',
+                           date_creation: str = '') -> None:
+        """Explicitly set author, comment, and/or date on an existing image.
+
+        Call this *after* sync_metadata to re-apply metadata that syncMetadata
+        may have erased by re-reading an un-annotated file.
+        """
+        params: dict = {"image_id": image_id}
+        if author:
+            params["author"] = author
+        if comment:
+            params["comment"] = comment
+        if date_creation:
+            params["date_creation"] = date_creation
+        if len(params) > 1:
+            self._call("pwg.images.setInfo", params)
+
     def set_image_categories(self, image_id: int, category_ids: list[int]) -> None:
         """Replace all category associations for an image."""
         cats = ";".join(str(c) for c in category_ids)
-        self._call("pwg.images.setInfo", {"image_id": image_id, "categories": cats})
+        self._call("pwg.images.setInfo", {
+            "image_id": image_id,
+            "categories": cats,
+            "multiple_value_mode": "replace",
+        })
 
     def get_album_images(self, cat_id: int, per_page: int = 500) -> list[dict]:
         """Return all images in a category, handling pagination automatically.
@@ -351,9 +379,11 @@ class PiwigoClient:
         page = 0
         while True:
             result = self._call("pwg.categories.getImages", {
-                "cat_id":   cat_id,
-                "per_page": per_page,
-                "page":     page,
+                "cat_id":          cat_id,
+                "per_page":        per_page,
+                "page":            page,
+                "with_tags":       "true",
+                "f_fields":        "id,file,name,comment,author,date_creation,tags,derivatives,element_url,categories",
             })
             batch = result.get("images", [])
             images.extend(batch)
