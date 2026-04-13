@@ -41,7 +41,24 @@ except ImportError:
     DND_AVAILABLE = False
     print("WARNING: tkinterdnd2 not installed. Run: pip install tkinterdnd2")
 
-import DownloadAlbumStructure
+# ---------------------------------------------------------------------------
+# Locate and import the shared DownloadAlbumStructure module
+# ---------------------------------------------------------------------------
+import sys as _sys
+if getattr(_sys, "frozen", False):
+    _SCRIPT_DIR = Path(_sys.executable).resolve().parent
+else:
+    _SCRIPT_DIR = Path(__file__).resolve().parent
+
+_PIWIGO_HELPERS = _SCRIPT_DIR.parent / "PiwigoHelpers"
+if str(_PIWIGO_HELPERS) not in _sys.path:
+    _sys.path.insert(0, str(_PIWIGO_HELPERS))
+
+try:
+    import DownloadAlbumStructure
+    DownloadAlbumStructure.PARAMS_FILE = _SCRIPT_DIR / "PhotosUploader Params.json"
+except ImportError as _e:
+    import sys; sys.exit(f"Cannot import DownloadAlbumStructure from {_PIWIGO_HELPERS}:\n{_e}")
 
 # ---------------------------------------------------------------------------
 # Logging configuration
