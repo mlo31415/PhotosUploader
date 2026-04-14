@@ -4,6 +4,7 @@ A GUI application for photo processing workflows.
 Requires: pip install Pillow tkinterdnd2 piexif
 """
 
+import sys
 import os
 import re
 import json
@@ -44,15 +45,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Locate and import the shared DownloadAlbumStructure module
 # ---------------------------------------------------------------------------
-import sys as _sys
-if getattr(_sys, "frozen", False):
-    _SCRIPT_DIR = Path(_sys.executable).resolve().parent
+if getattr(sys, "frozen", False):
+    _SCRIPT_DIR = Path(sys.executable).resolve().parent
 else:
     _SCRIPT_DIR = Path(__file__).resolve().parent
 
 _PIWIGO_HELPERS = _SCRIPT_DIR.parent / "PiwigoHelpers"
-if str(_PIWIGO_HELPERS) not in _sys.path:
-    _sys.path.insert(0, str(_PIWIGO_HELPERS))
+if str(_PIWIGO_HELPERS) not in sys.path:
+    sys.path.insert(0, str(_PIWIGO_HELPERS))
 
 try:
     import DownloadAlbumStructure
@@ -589,6 +589,9 @@ class PhotosUploader:
         )
         self.custom_vars['output_filename'].trace_add(
             'write', lambda *_: self._validate_output_filename_field()
+        )
+        self.output_filename_entry.bind(
+            "<FocusOut>", lambda _e: self._autocomplete_filename_ext()
         )
         self._register_field_link(
             custom_key  = 'tags',
@@ -1636,16 +1639,24 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Utilities
     # -----------------------------------------------------------------------
+    def _autocomplete_filename_ext(self):
+        """If the output filename has no extension when the user leaves the field, append .jpg."""
+        name = self.custom_vars['output_filename'].get().strip()
+        if name and not os.path.splitext(name)[1]:
+            self.custom_vars['output_filename'].set(name + '.jpg')
+
     def _validate_output_filename_field(self):
-        """Turn the field pink and block upload if the filename is illegal or lacks a valid image extension."""
+        """Turn the field pink and block upload if the filename is illegal or has a non-image extension.
+        No extension is accepted (FocusOut will append .jpg automatically)."""
         name = self.custom_vars['output_filename'].get().strip()
         _, dot_ext = os.path.splitext(name)
+        ext_ok = (not dot_ext) or (dot_ext.lower() in IMAGE_EXTENSIONS)
         valid = (
             bool(name)
             and not self._ILLEGAL_FILENAME_CHARS.search(name)
             and not self._RESERVED_NAMES.match(name)
             and not name.endswith('.')
-            and dot_ext.lower() in IMAGE_EXTENSIONS
+            and ext_ok
         )
         self._field_validity['filename'] = valid
         self.output_filename_entry.config(bg='pink' if not valid else 'white')
