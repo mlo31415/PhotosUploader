@@ -2011,23 +2011,30 @@ class PhotosUploader:
             if parsed_date:
                 date_creation = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Check against the Piwigo file dictionary — ask before overwriting
+        # Check against the Piwigo file dictionary — ask before overwriting.
+        # Exception: if the target album already contains this file we are saving
+        # an edited version back, so no warning is needed.
         file_dict = self._load_file_dict()
         if output_filename in file_dict:
             entries = file_dict[output_filename]
-            album_list = "\n  • ".join(
-                e.get("fullname", str(e)) if isinstance(e, dict) else str(e)
-                for e in entries
+            already_in_target = any(
+                e.get("album_id") == album_id for e in entries if isinstance(e, dict)
             )
-            proceed = messagebox.askyesno(
-                "File Already on Piwigo",
-                f'"{output_filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
-                "Do you want to overwrite it?",
-                parent=self.root,
-            )
-            if not proceed:
-                self.set_status(f"Upload cancelled: {output_filename} already exists on Piwigo.")
-                return
+            if not already_in_target:
+                album_list = "\n  • ".join(
+                    e.get("fullname", str(e)) if isinstance(e, dict) else str(e)
+                    for e in entries
+                )
+                proceed = messagebox.askyesno(
+                    "File Already on Piwigo",
+                    f'"{output_filename}" already exists on Piwigo in:\n  • {album_list}\n\n'
+                    "Do you want to overwrite it?",
+                    parent=self.root,
+                )
+                if not proceed:
+                    self.set_status(
+                        f"Upload cancelled: {output_filename} already exists on Piwigo.")
+                    return
 
         self.set_status(f"Uploading {output_filename}…")
 
