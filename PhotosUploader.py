@@ -285,6 +285,7 @@ class PhotosUploader:
         self._field_validity = {'date': False, 'caption': False, 'filename': False}
         self._auto_rename_confirmed   = False  # user has ack'd the rename warning for current value
         self._auto_rename_pending: dict | None = None  # caption/output set after _load_custom_fields
+        self._auto_rename_field_was_empty = True  # tracks empty→non-empty transition
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -1017,8 +1018,21 @@ class PhotosUploader:
     # Auto Rename
     # -----------------------------------------------------------------------
     def _on_auto_rename_changed(self):
-        """Text box changed — reset confirmation so the warning shows on next load."""
+        """Text box changed — reset confirmation so the warning shows on next load.
+
+        If the field transitions from empty to non-empty while a photo is already
+        loaded in the viewer, deselect it so the next click re-runs _load_photo
+        (and therefore _handle_auto_rename) on that same photo.
+        """
         self._auto_rename_confirmed = False
+        now_non_empty = bool(self.auto_rename_var.get().strip())
+        if now_non_empty and self._auto_rename_field_was_empty and self.current_photo:
+            # Save any edits the user may have made, then put the photo back
+            # in the queue unselected so clicking it triggers the rename.
+            self._save_current_custom_fields()
+            self.input_list.selection_clear(0, "end")
+            self._clear_viewer()   # sets current_photo = None
+        self._auto_rename_field_was_empty = not now_non_empty
 
     def _auto_rename_prefix(self) -> str:
         """Return the current prefix: the auto-rename box value with any trailing digits stripped."""
