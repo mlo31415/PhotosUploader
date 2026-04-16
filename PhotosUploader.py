@@ -57,8 +57,27 @@ if str(_PIWIGO_HELPERS) not in sys.path:
 try:
     import DownloadAlbumStructure
     DownloadAlbumStructure.PARAMS_FILE = _SCRIPT_DIR / "PhotosUploader Params.json"
-except ImportError as _e:
-    import sys; sys.exit(f"Cannot import DownloadAlbumStructure from {_PIWIGO_HELPERS}:\n{_e}")
+except Exception as _e:
+    # In a windowed exe sys.exit() is silent; show a dialog before giving up.
+    try:
+        import tkinter as _tk
+        import tkinter.messagebox as _mb
+        _tk.Tk().withdraw()
+        if getattr(sys, "frozen", False):
+            _msg = (
+                f"DownloadAlbumStructure could not be loaded.\n\n{_e}\n\n"
+                "This is likely a PyInstaller packaging problem — rebuild the exe "
+                "with the updated .spec file that includes DownloadAlbumStructure "
+                "in hiddenimports."
+            )
+        else:
+            _msg = (
+                f"Cannot import DownloadAlbumStructure from:\n  {_PIWIGO_HELPERS}\n\n{_e}"
+            )
+        _mb.showerror("Startup Error", _msg)
+    except Exception:
+        pass
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Logging configuration
@@ -266,7 +285,6 @@ class PhotosUploader:
         self._field_validity = {'date': False, 'caption': False, 'filename': False}
         self._auto_rename_confirmed   = False  # user has ack'd the rename warning for current value
         self._auto_rename_pending: dict | None = None  # caption/output set after _load_custom_fields
-        self._auto_rename_in_progress = False  # re-entrancy guard
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -391,43 +409,79 @@ class PhotosUploader:
         top_bar = ttk.Frame(viewer_frame)
         top_bar.pack(fill="x", pady=(0, 2))
 
-        ttk.Button(top_bar, text="Change Upload Album",
+        ttk.Button(top_bar, text="Change",
                    command=self.open_output_folder).pack(side="left", padx=(2, 6))
 
-        upload_to_label = ttk.Label(top_bar, text="Upload to:")
+        from tkinter.font import nametofont, Font as _Font
+        _df             = nametofont("TkDefaultFont")
+        _family         = _df.actual("family")
+        _size           = _df.actual("size")
+        _larger_font    = _Font(family=_family, size=_size + 2)
+        _larger_bold    = _Font(family=_family, size=_size + 2, weight="bold")
+
+        upload_to_label = ttk.Label(top_bar, text="Upload to:", font=_larger_font)
         upload_to_label.pack(side="left", padx=(0, 4))
 
-        album_display_var = tk.StringVar(value="(none)")
-        album_label = ttk.Label(top_bar, textvariable=album_display_var,
-                                foreground='blue', anchor="w")
-        album_label.pack(side="left", padx=(0, 4), fill="x", expand=True)
+        # Two labels in a container: path prefix (normal) + last album name (bold)
+        album_frame = ttk.Frame(top_bar)
+        album_frame.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        album_prefix_var = tk.StringVar(value="")
+        album_name_var   = tk.StringVar(value="(none)")
+
+        album_prefix_lbl = ttk.Label(album_frame, textvariable=album_prefix_var,
+                                     anchor="w", font=_larger_font)
+        album_prefix_lbl.pack(side="left")
+
+        album_name_lbl = ttk.Label(album_frame, textvariable=album_name_var,
+                                   anchor="w", font=_larger_bold)
+        album_name_lbl.pack(side="left", fill="x", expand=True)
 
         def _refresh_album_display(*_):
-            from tkinter.font import nametofont
-            full = self.upload_album_var.get()
-            # Set color: blue if album selected, gray if none
+            full  = self.upload_album_var.get()
             color = 'blue' if full and full != '(none)' else 'gray'
-            album_label.configure(foreground=color)
-            try:
-                font = nametofont("TkDefaultFont")
-                avail = album_label.winfo_width() - 4
-            except Exception:
-                album_display_var.set(full)
-                return
-            if avail < 20 or not full or full == "(none)":
-                album_display_var.set(full)
-                return
-            if font.measure(full) <= avail:
-                album_display_var.set(full)
-                return
-            for i in range(len(full)):
-                candidate = "\u2026" + full[i:]
-                if font.measure(candidate) <= avail:
-                    album_display_var.set(candidate)
-                    return
-            album_display_var.set("\u2026")
+            album_prefix_lbl.configure(foreground=color)
+            album_name_lbl.configure(foreground=color)
 
-        album_label.bind("<Configure>", _refresh_album_display)
+            if not full or full == '(none)':
+                album_prefix_var.set("")
+                album_name_var.set(full or "(none)")
+                return
+
+            # Split on last " / " to isolate the leaf album name
+            parts = full.rsplit(" / ", 1)
+            if len(parts) == 1:
+                prefix, name = "", parts[0]
+            else:
+                prefix, name = parts[0] + " / ", parts[1]
+
+            avail = album_frame.winfo_width() - 4
+            if avail < 20:
+                album_prefix_var.set(prefix)
+                album_name_var.set(name)
+                return
+
+            name_w   = _larger_bold.measure(name)
+            prefix_w = _larger_font.measure(prefix) if prefix else 0
+
+            if prefix_w + name_w <= avail:
+                album_prefix_var.set(prefix)
+                album_name_var.set(name)
+                return
+
+            # Truncate the prefix from the left so the bold name always shows in full
+            prefix_avail = max(0, avail - name_w)
+            if prefix and prefix_avail > 0:
+                for i in range(len(prefix)):
+                    candidate = "\u2026" + prefix[i:]
+                    if _larger_font.measure(candidate) <= prefix_avail:
+                        album_prefix_var.set(candidate)
+                        album_name_var.set(name)
+                        return
+            album_prefix_var.set("")
+            album_name_var.set(name)
+
+        album_frame.bind("<Configure>", _refresh_album_display)
         self.upload_album_var.trace_add("write", _refresh_album_display)
 
         # ── Left column: nav buttons, filename, dims, path ───────────────
@@ -856,8 +910,13 @@ class PhotosUploader:
     def _on_input_select(self, event):
         sel = self.input_list.curselection()
         if sel:
+            selected_path = self.input_paths[sel[0]]
+            if selected_path == self.current_photo:
+                # Programmatic selection_set (e.g. after auto-rename updates the list
+                # entry) re-fires <<ListboxSelect>>.  The file is already loaded; skip.
+                return
             self._save_current_custom_fields()
-            self.current_photo = self.input_paths[sel[0]]
+            self.current_photo = selected_path
             self._load_photo(self.current_photo)
         else:
             self._update_button_states()
@@ -972,17 +1031,13 @@ class PhotosUploader:
     def _auto_rename_next_counter(self, prefix: str) -> int:
         """Return the next counter value for prefix (1-based) and persist the increment."""
         counts: dict = self.state_data.setdefault("auto_rename_counts", {})
-        counts[prefix] = counts.get(prefix, 0) + 1
+        counts[prefix] = counts.get(prefix, 99) + 1
         save_state(self.state_data)
         return counts[prefix]
 
     def _handle_auto_rename(self, path: str) -> str | None:
         """Called at the start of _load_photo.
         Returns the (possibly renamed) path to load, or None to cancel the load."""
-        if self._auto_rename_in_progress:
-            # selection_set inside this method re-triggers <<ListboxSelect>> → _load_photo;
-            # skip the rename on that re-entrant call.
-            return path
         text = self.auto_rename_var.get().strip()
         if not text:
             self._auto_rename_pending = None
@@ -1003,45 +1058,41 @@ class PhotosUploader:
                 return None
             self._auto_rename_confirmed = True
 
-        self._auto_rename_in_progress = True
+        original_basename = os.path.basename(path)
+        original_stem, original_ext = os.path.splitext(original_basename)
+
+        prefix               = self._auto_rename_prefix()
+        counter              = self._auto_rename_next_counter(prefix)
+        new_stem             = f"{prefix}{counter:05d}"
+        new_output_filename  = new_stem + original_ext.lower()
+
+        # Rename the input file on disk: prepend "<new_stem> - " to its current name
+        src_dir      = os.path.dirname(path) or '.'
+        new_basename = new_stem + " - " + original_basename
+        new_path     = os.path.join(src_dir, new_basename)
         try:
-            original_basename = os.path.basename(path)
-            original_stem, original_ext = os.path.splitext(original_basename)
+            os.rename(path, new_path)
+            idx = self.input_paths.index(path)
+            self.input_paths[idx] = new_path
+            self.input_list.delete(idx)
+            self.input_list.insert(idx, os.path.basename(new_path))
+            self.input_list.selection_clear(0, "end")
+            self.input_list.selection_set(idx)
+            self.input_list.see(idx)
+            self.current_photo = new_path
+        except Exception as e:
+            messagebox.showerror("Auto Rename Failed",
+                                 f"Could not rename {original_basename}:\n{e}",
+                                 parent=self.root)
+            new_path            = path
+            new_output_filename = None
 
-            prefix               = self._auto_rename_prefix()
-            counter              = self._auto_rename_next_counter(prefix)
-            new_stem             = f"{prefix}{counter:05d}"
-            new_output_filename  = new_stem + original_ext.lower()
-
-            # Rename the input file on disk: prepend "<new_stem> - " to its current name
-            src_dir      = os.path.dirname(path) or '.'
-            new_basename = new_stem + " - " + original_basename
-            new_path     = os.path.join(src_dir, new_basename)
-            try:
-                os.rename(path, new_path)
-                idx = self.input_paths.index(path)
-                self.input_paths[idx] = new_path
-                self.input_list.delete(idx)
-                self.input_list.insert(idx, os.path.basename(new_path))
-                self.input_list.selection_clear(0, "end")
-                self.input_list.selection_set(idx)
-                self.input_list.see(idx)
-                self.current_photo = new_path
-            except Exception as e:
-                messagebox.showerror("Auto Rename Failed",
-                                     f"Could not rename {original_basename}:\n{e}",
-                                     parent=self.root)
-                new_path            = path
-                new_output_filename = None
-
-            # Stash what to fill in after _load_custom_fields clears the fields
-            self._auto_rename_pending = {
-                'caption':         original_stem,   # original filename without extension
-                'output_filename': new_output_filename,
-            }
-            return new_path
-        finally:
-            self._auto_rename_in_progress = False
+        # Stash what to fill in after _load_custom_fields clears the fields
+        self._auto_rename_pending = {
+            'caption':         original_stem,   # original filename without extension
+            'output_filename': new_output_filename,
+        }
+        return new_path
 
     def _apply_auto_rename_fields(self):
         """Set caption (if empty) and output filename from the auto-rename stash.
@@ -2220,4 +2271,24 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as _exc:
+        import traceback
+        _crash_log = _SCRIPT_DIR / "PhotosUploader Crash.log"
+        try:
+            with open(_crash_log, "w", encoding="utf-8") as _f:
+                traceback.print_exc(file=_f)
+        except OSError:
+            pass
+        try:
+            import tkinter as _tk
+            import tkinter.messagebox as _mb
+            _tk.Tk().withdraw()
+            _mb.showerror(
+                "Unexpected Error",
+                f"PhotosUploader crashed:\n\n{_exc}\n\n"
+                f"Details written to:\n{_crash_log}")
+        except Exception:
+            pass
+        sys.exit(1)
