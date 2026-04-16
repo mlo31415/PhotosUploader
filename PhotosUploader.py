@@ -264,6 +264,10 @@ class PhotosUploader:
         self.persist_vars = {}      # {field_key: BooleanVar} for persist checkboxes
         self._exif_data   = {}      # display-name -> value for the current photo
         self._field_validity = {'date': False, 'caption': False, 'filename': False}
+        self._auto_rename_confirmed = False  # user has ack'd the rename warning for current value
+        self._auto_rename_prefix    = ""     # non-digit prefix parsed from auto_rename_var
+        self._auto_rename_counter   = 0      # current counter; incremented before each use
+        self._auto_rename_pending: dict | None = None  # caption/output set after _load_custom_fields
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -484,6 +488,15 @@ class PhotosUploader:
             path_label.configure(wraplength=max(event.width - 4, 50))
         path_label.bind('<Configure>', _update_wraplength)
 
+        # ── Auto Rename row ───────────────────────────────────────────────
+        auto_rename_row = ttk.Frame(left_col)
+        auto_rename_row.pack(side="bottom", fill="x", pady=(6, 0))
+        ttk.Label(auto_rename_row, text="Auto Rename:").pack(side="left", padx=(0, 4))
+        self.auto_rename_var = tk.StringVar()
+        self.auto_rename_var.trace_add('write', lambda *_: self._on_auto_rename_changed())
+        ttk.Entry(auto_rename_row, textvariable=self.auto_rename_var).pack(
+            side="left", fill="x", expand=True)
+
         # ── Canvas — right side, narrower ────────────────────────────────
         self.canvas = tk.Canvas(viewer_frame, bg='#1a1a1a', cursor='crosshair',
                                 height=200)
@@ -530,7 +543,7 @@ class PhotosUploader:
         hpane.pack(fill="both", expand=True)
         self._center_hpane = hpane
 
-        # ── Custom Fields (left) ──────────────────────────────────────────
+        # ── Custom Fields ─────────────────────────────────────────────────
         custom_frame = ttk.LabelFrame(hpane, text="Custom Fields", padding=6)
         hpane.add(custom_frame, weight=9)
 
@@ -569,6 +582,14 @@ class PhotosUploader:
                     entry = ttk.Entry(custom_frame, textvariable=var, width=40)
                 entry.grid(row=row, column=2, sticky="ew", pady=2)
                 self.custom_vars[key] = var
+
+        # Toggle button directly below the Tags row (last field), spanning all columns
+        btn_row = len(CUSTOM_FIELDS) + 1
+        self._exif_toggle_btn = ttk.Button(custom_frame, text="Show EXIF/Metadata",
+                                           command=self._toggle_exif_panel)
+        self._exif_toggle_btn.grid(row=btn_row, column=0, columnspan=3,
+                                   sticky="w", pady=(4, 2), padx=(0, 4))
+
         custom_frame.columnconfigure(2, weight=1)
 
         # ── Bidirectional field links (custom field ↔ EXIF ↔ IPTC) ──────────
@@ -611,9 +632,13 @@ class PhotosUploader:
 
         self.custom_vars['comments'].bind('<<Modified>>', _on_comments_changed)
 
-        # ── EXIF / Metadata (right) ───────────────────────────────────────
-        exif_frame = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
-        hpane.add(exif_frame, weight=8)
+        # ── EXIF / Metadata — pane added/removed from hpane to achieve true zero height
+        exif_outer = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
+        self._exif_outer = exif_outer
+        self._exif_shown = False   # State 2 (hidden) is the initial state
+        # Do NOT call hpane.add() here — pane starts hidden
+
+        exif_frame = exif_outer   # alias so the rest of the code below is unchanged
 
         # Edit row packed first (side=BOTTOM) so the tree fills remaining space
         edit_row = ttk.Frame(exif_frame)
@@ -945,12 +970,121 @@ class PhotosUploader:
         self.current_photo = dest
         self._load_photo(self.current_photo)
 
+    # -----------------------------------------------------------------------
+    # Auto Rename
+    # -----------------------------------------------------------------------
+    def _on_auto_rename_changed(self):
+        """Text box changed — reset confirmation so the warning shows on next load."""
+        self._auto_rename_confirmed = False
+
+    def _parse_auto_rename(self):
+        """Parse prefix and starting counter from the auto-rename box.
+        E.g. 'photo123' → prefix='photo', counter=123 (next file gets 00124).
+        If there are no trailing digits, counter starts at 0 (first file gets 00001)."""
+        text = self.auto_rename_var.get().strip()
+        i = len(text)
+        while i > 0 and text[i - 1].isdigit():
+            i -= 1
+        self._auto_rename_prefix  = text[:i]
+        digits_str = text[i:]
+        self._auto_rename_counter = int(digits_str) if digits_str else 0
+
+    def _handle_auto_rename(self, path: str) -> str | None:
+        """Called at the start of _load_photo.
+        Returns the (possibly renamed) path to load, or None to cancel the load."""
+        text = self.auto_rename_var.get().strip()
+        if not text:
+            self._auto_rename_pending = None
+            return path
+
+        # First file after box gained a value → ask for confirmation
+        if not self._auto_rename_confirmed:
+            answer = messagebox.askyesno(
+                "Auto Rename Active",
+                "Auto Renaming is in effect. The names of the input files will be "
+                "changed.\n\nPlease confirm you want this.",
+                parent=self.root,
+            )
+            if not answer:
+                # Leave file in queue, clear viewer, do nothing
+                self.input_list.selection_clear(0, "end")
+                self._clear_viewer()
+                return None
+            self._auto_rename_confirmed = True
+            self._parse_auto_rename()
+
+        original_basename = os.path.basename(path)
+        original_stem, original_ext = os.path.splitext(original_basename)
+
+        # Build new output filename (counter incremented first)
+        self._auto_rename_counter += 1
+        new_stem             = f"{self._auto_rename_prefix}{self._auto_rename_counter:05d}"
+        new_output_filename  = new_stem + original_ext.lower()
+
+        # Rename the input file on disk: prepend "<new_stem> - " to its current name
+        src_dir      = os.path.dirname(path) or '.'
+        new_basename = new_stem + " - " + original_basename
+        new_path     = os.path.join(src_dir, new_basename)
+        try:
+            os.rename(path, new_path)
+            idx = self.input_paths.index(path)
+            self.input_paths[idx] = new_path
+            self.input_list.delete(idx)
+            self.input_list.insert(idx, os.path.basename(new_path))
+            self.input_list.selection_clear(0, "end")
+            self.input_list.selection_set(idx)
+            self.input_list.see(idx)
+            self.current_photo = new_path
+        except Exception as e:
+            messagebox.showerror("Auto Rename Failed",
+                                 f"Could not rename {original_basename}:\n{e}",
+                                 parent=self.root)
+            new_path            = path
+            new_output_filename = None
+
+        # Stash what to fill in after _load_custom_fields clears the fields
+        self._auto_rename_pending = {
+            'caption':         original_stem,   # original filename without extension
+            'output_filename': new_output_filename,
+        }
+        return new_path
+
+    def _apply_auto_rename_fields(self):
+        """Set caption (if empty) and output filename from the auto-rename stash.
+        Must be called after _load_custom_fields so it overwrites the cleared fields."""
+        if not self._auto_rename_pending:
+            return
+        pending = self._auto_rename_pending
+        self._auto_rename_pending = None
+
+        # Caption: set only if the field is currently empty
+        caption_widget = self.custom_vars.get('comments')
+        if caption_widget is not None:
+            if isinstance(caption_widget, tk.Text):
+                if not caption_widget.get('1.0', 'end').strip():
+                    caption_widget.delete('1.0', 'end')
+                    caption_widget.insert('1.0', pending['caption'])
+                    caption_widget.edit_modified(False)
+            else:
+                if not caption_widget.get().strip():
+                    caption_widget.set(pending['caption'])
+
+        # Output filename: always set from auto-rename
+        if pending['output_filename']:
+            output_var = self.custom_vars.get('output_filename')
+            if output_var is not None:
+                output_var.set(pending['output_filename'])
+
     def _load_photo(self, path: str):
+        path = self._handle_auto_rename(path)
+        if path is None:
+            return
         self.photo_label_var.set(os.path.basename(path))
         self._display_photo(path)
         self._load_exif(path)
         self._load_iptc(path)
         self._load_custom_fields(path)
+        self._apply_auto_rename_fields()   # must run after _load_custom_fields
         self.path_var.set(path)
         self._validate_caption_field()
         self._validate_date_field()
@@ -1603,6 +1737,18 @@ class PhotosUploader:
         except Exception as e:
             self.set_status(f"Warning: could not write EXIF to {os.path.basename(path)}: {e}")
 
+    def _toggle_exif_panel(self):
+        """Toggle the EXIF/Metadata panel between shown (State 1) and hidden (State 2)."""
+        if self._exif_shown:
+            self._center_hpane.forget(self._exif_outer)
+            self._exif_toggle_btn.configure(text="Show EXIF/Metadata")
+            self._exif_shown = False
+        else:
+            self._center_hpane.add(self._exif_outer, weight=8)
+            self._exif_toggle_btn.configure(text="Hide EXIF/Metadata")
+            self._exif_shown = True
+            self.root.after(20, self._set_exif_sash)
+
     def _clear_viewer(self):
         """Reset the photo viewer, EXIF tree, and all custom fields to empty."""
         self.current_photo = None
@@ -1707,7 +1853,7 @@ class PhotosUploader:
         self._update_button_states()
 
     def _set_initial_sash_positions(self):
-        """Set sash positions so viewer gets ~43%, custom fields ~30%, EXIF ~27%."""
+        """Set sash positions so viewer gets ~43%, custom fields ~62%, EXIF ~38%."""
         total = self._center_vpane.winfo_height()
         if total < 50:
             # Window not yet fully rendered — retry shortly
@@ -1715,8 +1861,18 @@ class PhotosUploader:
             return
         viewer_h = round(total * 13 / 30)
         self._center_vpane.sashpos(0, viewer_h)
-        hpane_h = total - viewer_h
-        self._center_hpane.sashpos(0, round(hpane_h * 9 / 17))
+        # hpane sash is only meaningful when the EXIF pane is visible
+        if self._exif_shown:
+            hpane_h = self._center_hpane.winfo_height()
+            self._center_hpane.sashpos(0, round(hpane_h * 0.62))
+
+    def _set_exif_sash(self):
+        """Position the hpane sash so EXIF gets ~38% of the available height."""
+        hpane_h = self._center_hpane.winfo_height()
+        if hpane_h < 20:
+            self.root.after(50, self._set_exif_sash)
+            return
+        self._center_hpane.sashpos(0, round(hpane_h * 0.62))
 
     def _center_dialog(self, dlg: tk.Toplevel):
         """Centre dlg over the main window."""
