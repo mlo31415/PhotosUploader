@@ -264,10 +264,9 @@ class PhotosUploader:
         self.persist_vars = {}      # {field_key: BooleanVar} for persist checkboxes
         self._exif_data   = {}      # display-name -> value for the current photo
         self._field_validity = {'date': False, 'caption': False, 'filename': False}
-        self._auto_rename_confirmed = False  # user has ack'd the rename warning for current value
-        self._auto_rename_prefix    = ""     # non-digit prefix parsed from auto_rename_var
-        self._auto_rename_counter   = 0      # current counter; incremented before each use
+        self._auto_rename_confirmed   = False  # user has ack'd the rename warning for current value
         self._auto_rename_pending: dict | None = None  # caption/output set after _load_custom_fields
+        self._auto_rename_in_progress = False  # re-entrancy guard
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -962,21 +961,28 @@ class PhotosUploader:
         """Text box changed — reset confirmation so the warning shows on next load."""
         self._auto_rename_confirmed = False
 
-    def _parse_auto_rename(self):
-        """Parse prefix and starting counter from the auto-rename box.
-        E.g. 'photo123' → prefix='photo', counter=123 (next file gets 00124).
-        If there are no trailing digits, counter starts at 0 (first file gets 00001)."""
+    def _auto_rename_prefix(self) -> str:
+        """Return the current prefix: the auto-rename box value with any trailing digits stripped."""
         text = self.auto_rename_var.get().strip()
         i = len(text)
         while i > 0 and text[i - 1].isdigit():
             i -= 1
-        self._auto_rename_prefix  = text[:i]
-        digits_str = text[i:]
-        self._auto_rename_counter = int(digits_str) if digits_str else 0
+        return text[:i]
+
+    def _auto_rename_next_counter(self, prefix: str) -> int:
+        """Return the next counter value for prefix (1-based) and persist the increment."""
+        counts: dict = self.state_data.setdefault("auto_rename_counts", {})
+        counts[prefix] = counts.get(prefix, 0) + 1
+        save_state(self.state_data)
+        return counts[prefix]
 
     def _handle_auto_rename(self, path: str) -> str | None:
         """Called at the start of _load_photo.
         Returns the (possibly renamed) path to load, or None to cancel the load."""
+        if self._auto_rename_in_progress:
+            # selection_set inside this method re-triggers <<ListboxSelect>> → _load_photo;
+            # skip the rename on that re-entrant call.
+            return path
         text = self.auto_rename_var.get().strip()
         if not text:
             self._auto_rename_pending = None
@@ -996,43 +1002,46 @@ class PhotosUploader:
                 self._clear_viewer()
                 return None
             self._auto_rename_confirmed = True
-            self._parse_auto_rename()
 
-        original_basename = os.path.basename(path)
-        original_stem, original_ext = os.path.splitext(original_basename)
-
-        # Build new output filename (counter incremented first)
-        self._auto_rename_counter += 1
-        new_stem             = f"{self._auto_rename_prefix}{self._auto_rename_counter:05d}"
-        new_output_filename  = new_stem + original_ext.lower()
-
-        # Rename the input file on disk: prepend "<new_stem> - " to its current name
-        src_dir      = os.path.dirname(path) or '.'
-        new_basename = new_stem + " - " + original_basename
-        new_path     = os.path.join(src_dir, new_basename)
+        self._auto_rename_in_progress = True
         try:
-            os.rename(path, new_path)
-            idx = self.input_paths.index(path)
-            self.input_paths[idx] = new_path
-            self.input_list.delete(idx)
-            self.input_list.insert(idx, os.path.basename(new_path))
-            self.input_list.selection_clear(0, "end")
-            self.input_list.selection_set(idx)
-            self.input_list.see(idx)
-            self.current_photo = new_path
-        except Exception as e:
-            messagebox.showerror("Auto Rename Failed",
-                                 f"Could not rename {original_basename}:\n{e}",
-                                 parent=self.root)
-            new_path            = path
-            new_output_filename = None
+            original_basename = os.path.basename(path)
+            original_stem, original_ext = os.path.splitext(original_basename)
 
-        # Stash what to fill in after _load_custom_fields clears the fields
-        self._auto_rename_pending = {
-            'caption':         original_stem,   # original filename without extension
-            'output_filename': new_output_filename,
-        }
-        return new_path
+            prefix               = self._auto_rename_prefix()
+            counter              = self._auto_rename_next_counter(prefix)
+            new_stem             = f"{prefix}{counter:05d}"
+            new_output_filename  = new_stem + original_ext.lower()
+
+            # Rename the input file on disk: prepend "<new_stem> - " to its current name
+            src_dir      = os.path.dirname(path) or '.'
+            new_basename = new_stem + " - " + original_basename
+            new_path     = os.path.join(src_dir, new_basename)
+            try:
+                os.rename(path, new_path)
+                idx = self.input_paths.index(path)
+                self.input_paths[idx] = new_path
+                self.input_list.delete(idx)
+                self.input_list.insert(idx, os.path.basename(new_path))
+                self.input_list.selection_clear(0, "end")
+                self.input_list.selection_set(idx)
+                self.input_list.see(idx)
+                self.current_photo = new_path
+            except Exception as e:
+                messagebox.showerror("Auto Rename Failed",
+                                     f"Could not rename {original_basename}:\n{e}",
+                                     parent=self.root)
+                new_path            = path
+                new_output_filename = None
+
+            # Stash what to fill in after _load_custom_fields clears the fields
+            self._auto_rename_pending = {
+                'caption':         original_stem,   # original filename without extension
+                'output_filename': new_output_filename,
+            }
+            return new_path
+        finally:
+            self._auto_rename_in_progress = False
 
     def _apply_auto_rename_fields(self):
         """Set caption (if empty) and output filename from the auto-rename stash.
