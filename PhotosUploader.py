@@ -1029,11 +1029,10 @@ class PhotosUploader:
         return text[:i]
 
     def _auto_rename_next_counter(self, prefix: str) -> int:
-        """Return the next counter value for prefix (1-based) and persist the increment."""
+        """Return the next counter value for prefix.
+        Does NOT persist — caller must call save_state() after a successful rename."""
         counts: dict = self.state_data.setdefault("auto_rename_counts", {})
-        counts[prefix] = counts.get(prefix, 99) + 1
-        save_state(self.state_data)
-        return counts[prefix]
+        return counts.get(prefix, 99) + 1
 
     def _handle_auto_rename(self, path: str) -> str | None:
         """Called at the start of _load_photo.
@@ -1061,17 +1060,24 @@ class PhotosUploader:
         original_basename = os.path.basename(path)
         original_stem, original_ext = os.path.splitext(original_basename)
 
-        prefix               = self._auto_rename_prefix()
-        counter              = self._auto_rename_next_counter(prefix)
-        new_stem             = f"{prefix}{counter:05d}"
-        new_output_filename  = new_stem + original_ext.lower()
-
-        # Rename the input file on disk: prepend "<new_stem> - " to its current name
-        src_dir      = os.path.dirname(path) or '.'
-        new_basename = new_stem + " - " + original_basename
-        new_path     = os.path.join(src_dir, new_basename)
+        new_path            = path
+        new_output_filename = None
         try:
+            prefix  = self._auto_rename_prefix()
+            counter = self._auto_rename_next_counter(prefix)
+            new_stem            = f"{prefix}{counter:05d}"
+            new_output_filename = new_stem + original_ext.lower()
+
+            # Rename the input file on disk: prepend "<new_stem> - " to its current name
+            src_dir      = os.path.dirname(path) or '.'
+            new_basename = new_stem + " - " + original_basename
+            new_path     = os.path.join(src_dir, new_basename)
             os.rename(path, new_path)
+
+            # Persist counter only after rename succeeds
+            self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
+            save_state(self.state_data)
+
             idx = self.input_paths.index(path)
             self.input_paths[idx] = new_path
             self.input_list.delete(idx)
@@ -1081,11 +1087,11 @@ class PhotosUploader:
             self.input_list.see(idx)
             self.current_photo = new_path
         except Exception as e:
+            new_path            = path
+            new_output_filename = None
             messagebox.showerror("Auto Rename Failed",
                                  f"Could not rename {original_basename}:\n{e}",
                                  parent=self.root)
-            new_path            = path
-            new_output_filename = None
 
         # Stash what to fill in after _load_custom_fields clears the fields
         self._auto_rename_pending = {
@@ -1128,6 +1134,7 @@ class PhotosUploader:
         self._display_photo(path)
         self._load_exif(path)
         self._load_iptc(path)
+        self._apply_file_date_fallback(path)
         self._load_custom_fields(path)
         self._apply_auto_rename_fields()   # must run after _load_custom_fields
         self.path_var.set(path)
@@ -1677,6 +1684,57 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     # Custom fields
     # -----------------------------------------------------------------------
+    def _apply_file_date_fallback(self, path: str):
+        """If date_of_photo is empty or pre-1980 after IPTC/EXIF loading,
+        fill it from the file's filesystem timestamps.
+
+        Uses the modification time; if the creation time is earlier and still
+        newer than 1980, the creation time is used instead.
+        """
+        date_var = self.custom_vars.get('date_of_photo')
+        if date_var is None:
+            return
+
+        # Don't overwrite a persisted field
+        persist_var = self.persist_vars.get('date_of_photo')
+        if persist_var and persist_var.get():
+            return
+
+        # If there is already a valid embedded date from 1980 onwards, keep it
+        existing = date_var.get().strip()
+        if existing:
+            parsed = self._parse_date(existing)
+            if parsed and parsed.year >= 1980:
+                return
+
+        # Gather filesystem timestamps
+        try:
+            mtime = os.path.getmtime(path)
+            ctime = os.path.getctime(path)   # creation time on Windows; inode-change on Unix
+        except OSError:
+            return
+
+        cutoff   = datetime(1980, 1, 1)
+        mtime_dt = datetime.fromtimestamp(mtime)
+        ctime_dt = datetime.fromtimestamp(ctime)
+
+        # Prefer whichever is earlier, but only if it's newer than 1980
+        if ctime_dt < mtime_dt and ctime_dt > cutoff:
+            chosen = ctime_dt
+        elif mtime_dt > cutoff:
+            chosen = mtime_dt
+        elif ctime_dt > cutoff:
+            chosen = ctime_dt
+        else:
+            return  # both timestamps are unusably old
+
+        date_str = chosen.strftime('%Y:%m:%d %H:%M:%S')
+        date_var.set(date_str)
+
+        # Keep the EXIF display tree in sync
+        self._exif_data['Date Created'] = date_str
+        self._refresh_exif_tree()
+
     def _load_custom_fields(self, path: str):
         # Keys populated from IPTC on every load — don't clear these when
         # there is no saved data, as _load_iptc has already set them.
