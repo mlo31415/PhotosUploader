@@ -392,8 +392,11 @@ class PhotosUploader:
         top_bar = ttk.Frame(viewer_frame)
         top_bar.pack(fill="x", pady=(0, 2))
 
+        ttk.Button(top_bar, text="Change Upload Album",
+                   command=self.open_output_folder).pack(side="left", padx=(2, 6))
+
         upload_to_label = ttk.Label(top_bar, text="Upload to:")
-        upload_to_label.pack(side="left", padx=(2, 4))
+        upload_to_label.pack(side="left", padx=(0, 4))
 
         album_display_var = tk.StringVar(value="(none)")
         album_label = ttk.Label(top_bar, textvariable=album_display_var,
@@ -427,24 +430,6 @@ class PhotosUploader:
 
         album_label.bind("<Configure>", _refresh_album_display)
         self.upload_album_var.trace_add("write", _refresh_album_display)
-
-        # ── Button row: Change Upload Album ────────────────────────────────
-        button_bar = ttk.Frame(viewer_frame)
-        button_bar.pack(fill="x", pady=(0, 4))
-
-        # Spacer frame to align button with album_label above
-        spacer = tk.Frame(button_bar)
-        spacer.pack(side="left", padx=(2, 4))
-
-        # Measure and sync spacer width to match upload_to_label
-        def _sync_widths():
-            w = upload_to_label.winfo_reqwidth()
-            spacer.configure(width=max(w, 1), height=1)
-
-        button_bar.after(50, _sync_widths)
-
-        ttk.Button(button_bar, text="Change Upload Album",
-                   command=self.open_output_folder).pack(side="left", padx=2)
 
         # ── Left column: nav buttons, filename, dims, path ───────────────
         left_col = ttk.Frame(viewer_frame)
