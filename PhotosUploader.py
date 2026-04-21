@@ -2021,7 +2021,8 @@ class PhotosUploader:
     # JPEG file extensions (used to decide whether format conversion is needed)
     _JPEG_EXTENSIONS: frozenset[str] = frozenset({'.jpg', '.jpeg', '.jpe', '.jfif'})
 
-    def _prepare_upload_copy(self, path: str, params: dict) -> str | None:
+    def _prepare_upload_copy(self, path: str, params: dict,
+                             source_image=None) -> str | None:
         """Create a temp copy of the file for upload, optionally converted to JPEG,
         resized, and with EXIF stripped.
 
@@ -2049,8 +2050,8 @@ class PhotosUploader:
             save_kwargs = {} if is_jpeg else {'format': 'JPEG', 'quality': 92}
 
             max_pixels = params.get('max_upload_pixels')
-            with Image.open(path) as src:  # type: ignore[possibly-undefined]
-                # Convert palette/transparency modes that JPEG can't handle
+
+            def _process(src):
                 img = src
                 if not is_jpeg and src.mode not in ('RGB', 'L'):
                     img = src.convert('RGB')  # type: ignore[possibly-undefined]
@@ -2070,6 +2071,12 @@ class PhotosUploader:
                 finally:
                     if img is not src:
                         img.close()
+
+            if source_image is not None:
+                _process(source_image)
+            else:
+                with Image.open(path) as src:  # type: ignore[possibly-undefined]
+                    _process(src)
 
             # Strip EXIF from temp copy (piexif only works on JPEG)
             if PIEXIF_AVAILABLE and out_ext.lower() in self._JPEG_EXTENSIONS:
@@ -2196,10 +2203,15 @@ class PhotosUploader:
                 progress_dlg.grab_release()
                 progress_dlg.destroy()
 
+        # Capture any in-memory edits (crop/rotate) on the main thread before
+        # handing off to the worker — _cached_image is GUI state and must not
+        # be read from a background thread.
+        edited_image = self._cached_image.copy() if self._cached_image is not None else None
+
         def worker():
             # Prepare upload copy (resize + EXIF strip) inside the thread so the
             # UI is never blocked and the progress dialog covers the full operation.
-            temp_path = self._prepare_upload_copy(path, params)
+            temp_path = self._prepare_upload_copy(path, params, source_image=edited_image)
             upload_path = temp_path if temp_path else path
             logger.debug(f"Uploading to Piwigo: album_id={album_id}, album={album}, path={upload_path}")
 
