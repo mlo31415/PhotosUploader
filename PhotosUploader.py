@@ -87,6 +87,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -2213,7 +2214,6 @@ class PhotosUploader:
             # UI is never blocked and the progress dialog covers the full operation.
             temp_path = self._prepare_upload_copy(path, params, source_image=edited_image)
             upload_path = temp_path if temp_path else path
-            logger.debug(f"Uploading to Piwigo: album_id={album_id}, album={album}, path={upload_path}")
 
             client = DownloadAlbumStructure.PiwigoClient(
                 params['url'], params['username'], params['password'],
