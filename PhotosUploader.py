@@ -287,6 +287,7 @@ class PhotosUploader:
         self._auto_rename_confirmed   = False  # user has ack'd the rename warning for current value
         self._auto_rename_pending: dict | None = None  # caption/output set after _load_custom_fields
         self._auto_rename_field_was_empty = True  # tracks empty→non-empty transition
+        self._last_auto_rename: dict | None = None  # set after a rename; cleared on skip-revert or next load
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -932,6 +933,23 @@ class PhotosUploader:
         except ValueError:
             return
 
+        # If this photo was auto-renamed, undo the rename before discarding it
+        if (self._last_auto_rename and
+                self._last_auto_rename['new_path'] == self.current_photo):
+            info = self._last_auto_rename
+            try:
+                os.rename(info['new_path'], info['original_path'])
+                counts = self.state_data.setdefault("auto_rename_counts", {})
+                counts[info['prefix']] = info['counter'] - 1
+                save_state(self.state_data)
+                self.input_paths[idx] = info['original_path']
+                self.input_list.delete(idx)
+                self.input_list.insert(idx, os.path.basename(info['original_path']))
+                self.current_photo = info['original_path']
+            except Exception as e:
+                self.set_status(f"Warning: could not revert rename: {e}")
+            self._last_auto_rename = None
+
         # Remove the current photo from the input queue
         self.input_paths.pop(idx)
         self.input_list.delete(idx)
@@ -1093,6 +1111,9 @@ class PhotosUploader:
             self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
             save_state(self.state_data)
 
+            self._last_auto_rename = {'original_path': path, 'new_path': new_path,
+                                      'prefix': prefix, 'counter': counter}
+
             idx = self.input_paths.index(path)
             self.input_paths[idx] = new_path
             self.input_list.delete(idx)
@@ -1104,6 +1125,7 @@ class PhotosUploader:
         except Exception as e:
             new_path            = path
             new_output_filename = None
+            self._last_auto_rename = None
             messagebox.showerror("Auto Rename Failed",
                                  f"Could not rename {original_basename}:\n{e}",
                                  parent=self.root)
