@@ -264,7 +264,7 @@ class _FieldTooltip:
 class PhotosUploader:
     def __init__(self, root):
         self.root = root
-        self.root.title("PhotosUploader")
+        self.root.title("FANAC.org Photos Uploader")
         self.root.geometry("1400x820")
         self.root.minsize(1000, 600)
 
@@ -1145,9 +1145,10 @@ class PhotosUploader:
         pending = self._auto_rename_pending
         self._auto_rename_pending = None
 
-        # Caption: set only if the field is currently empty
+        # Caption: set only if the field is empty and persist is not on
         caption_widget = self.custom_vars.get('comments')
-        if caption_widget is not None:
+        caption_persist = self.persist_vars.get('comments')
+        if caption_widget is not None and not (caption_persist and caption_persist.get()):
             if isinstance(caption_widget, tk.Text):
                 if not caption_widget.get('1.0', 'end').strip():
                     caption_widget.delete('1.0', 'end')
@@ -1670,10 +1671,21 @@ class PhotosUploader:
             if link['exif_key'] is not None:
                 self._exif_data[link['exif_key']] = value
 
-            # Don't overwrite a persisted field
+            auto_rename_active = bool(self.auto_rename_var.get().strip())
+
+            # When auto-rename is active and the photo has no embedded Source,
+            # leave the field as-is rather than clearing it.
+            if auto_rename_active and not value and link['custom_key'] == 'photo_source':
+                continue
+
+            # Don't overwrite a persisted field — except when auto-rename is active
+            # and the photo has an embedded date (always prefer the photo's own date).
             persist_var = self.persist_vars.get(link['custom_key'])
             if persist_var and persist_var.get():
-                continue
+                override = (auto_rename_active and value
+                            and link['custom_key'] == 'date_of_photo')
+                if not override:
+                    continue
 
             # Populate the custom field under the reentrancy guard
             link['syncing'] = True
