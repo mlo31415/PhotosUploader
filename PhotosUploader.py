@@ -2369,6 +2369,7 @@ class PhotosUploader:
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
         self.root.bind('<Control-u>', lambda e: self._upload_current_photo())
+        self.root.bind('<Control-y>', lambda e: self._crop_photo_viewer())
         self.root.bind('<Control-z>', lambda e: self._undo_edit_viewer())
 
 
