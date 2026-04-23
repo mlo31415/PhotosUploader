@@ -44,7 +44,7 @@ except ImportError:
     print("WARNING: tkinterdnd2 not installed. Run: pip install tkinterdnd2")
 
 # ---------------------------------------------------------------------------
-# Locate and import the shared DownloadAlbumStructure module
+# Locate and import the shared AlbumHierarchy module
 # ---------------------------------------------------------------------------
 if getattr(sys, "frozen", False):
     _SCRIPT_DIR = Path(sys.executable).resolve().parent
@@ -56,8 +56,9 @@ if str(_PIWIGO_HELPERS) not in sys.path:
     sys.path.insert(0, str(_PIWIGO_HELPERS))
 
 try:
-    import DownloadAlbumStructure
-    DownloadAlbumStructure.PARAMS_FILE = _SCRIPT_DIR / "PhotosUploader Params.json"
+    import AlbumHierarchy
+    import TagHandler
+    AlbumHierarchy.PARAMS_FILE = _SCRIPT_DIR / "PhotosUploader Params.json"
 except Exception as _e:
     # In a windowed exe sys.exit() is silent; show a dialog before giving up.
     try:
@@ -66,14 +67,14 @@ except Exception as _e:
         _tk.Tk().withdraw()
         if getattr(sys, "frozen", False):
             _msg = (
-                f"DownloadAlbumStructure could not be loaded.\n\n{_e}\n\n"
+                f"AlbumHierarchy could not be loaded.\n\n{_e}\n\n"
                 "This is likely a PyInstaller packaging problem — rebuild the exe "
-                "with the updated .spec file that includes DownloadAlbumStructure "
+                "with the updated .spec file that includes AlbumHierarchy "
                 "in hiddenimports."
             )
         else:
             _msg = (
-                f"Cannot import DownloadAlbumStructure from:\n  {_PIWIGO_HELPERS}\n\n{_e}"
+                f"Cannot import AlbumHierarchy from:\n  {_PIWIGO_HELPERS}\n\n{_e}"
             )
         _mb.showerror("Startup Error", _msg)
     except Exception:
@@ -95,7 +96,7 @@ logger = logging.getLogger(__name__)
 # State persistence
 # ---------------------------------------------------------------------------
 def _state_file() -> Path:
-    return DownloadAlbumStructure.get_data_dir() / "PhotosUploader State.json"
+    return AlbumHierarchy.get_data_dir() / "PhotosUploader State.json"
 
 
 def _window_is_on_a_monitor(hwnd: int) -> bool:
@@ -915,7 +916,7 @@ class PhotosUploader:
             self.upload_album_id = album_id
             self.upload_album_var.set(fullname)
             self.set_status(f"Upload album set to: {fullname}")
-        DownloadAlbumStructure.pick_album(self.root, self.set_status, on_select,
+        AlbumHierarchy.pick_album(self.root, self.set_status, on_select,
                                           title="Select Upload Album")
 
     # -----------------------------------------------------------------------
@@ -1848,7 +1849,7 @@ class PhotosUploader:
 
     def _load_file_dict(self) -> dict[str, list[dict[str, Any]]]:
         """Load FileDict.json and return it, or an empty dict if unavailable."""
-        p = DownloadAlbumStructure._file_index_file()
+        p = AlbumHierarchy._file_index_file()
         if not p.exists():
             return {}
         try:
@@ -2037,7 +2038,7 @@ class PhotosUploader:
 
     def _open_tag_picker(self):
         """Open a checklist dialog for selecting tags from the Piwigo site."""
-        DownloadAlbumStructure.show_tag_picker(self.root, self.custom_vars['tags'], self._tag_cache)
+        TagHandler.show_tag_picker(self.root, self.custom_vars['tags'], self._tag_cache)
 
     def _center_dialog(self, dlg: tk.Toplevel):
         """Centre dlg over the main window."""
@@ -2058,7 +2059,7 @@ class PhotosUploader:
             self.upload_album_var.set(fullname)
             self.set_status(f"Upload album set to: {fullname}")
             self._persist_state()
-        DownloadAlbumStructure.add_album(self.root, self.set_status,
+        AlbumHierarchy.add_album(self.root, self.set_status,
                                          on_created_cb=_on_created)
 
     # -----------------------------------------------------------------------
@@ -2069,7 +2070,7 @@ class PhotosUploader:
                        album_id: int = 0, file_id: int = 0):
         """Call after a file has been successfully uploaded to Piwigo."""
         filename = os.path.basename(path)
-        DownloadAlbumStructure.record_uploaded_file(
+        AlbumHierarchy.record_uploaded_file(
             filename, album_fullname, album_id=album_id, file_id=file_id)
 
     # JPEG file extensions (used to decide whether format conversion is needed)
@@ -2165,7 +2166,7 @@ class PhotosUploader:
         original_path = path  # preserved for queue removal even if path is renamed
 
         try:
-            params = DownloadAlbumStructure.load_params()
+            params = AlbumHierarchy.load_params()
         except (FileNotFoundError, ValueError) as exc:
             messagebox.showerror("Configuration error", str(exc), parent=self.root)
             return
@@ -2268,7 +2269,7 @@ class PhotosUploader:
             temp_path = self._prepare_upload_copy(path, params, source_image=edited_image)
             upload_path = temp_path if temp_path else path
 
-            client = DownloadAlbumStructure.PiwigoClient(
+            client = AlbumHierarchy.PiwigoClient(
                 params['url'], params['username'], params['password'],
                 verify_ssl=params.get('verify_ssl', True),
             )
@@ -2340,10 +2341,10 @@ class PhotosUploader:
         threading.Thread(target=worker, daemon=True).start()
 
     def _download_album_hierarchy(self):
-        DownloadAlbumStructure.run(self.root, self.set_status)
+        AlbumHierarchy.run(self.root, self.set_status)
 
     def _download_file_list(self):
-        DownloadAlbumStructure.download_file_index(self.root, self.set_status)
+        AlbumHierarchy.download_file_index(self.root, self.set_status)
 
     # -----------------------------------------------------------------------
     # Window geometry persistence
