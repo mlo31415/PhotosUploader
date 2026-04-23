@@ -2039,7 +2039,13 @@ class PhotosUploader:
 
 
     def _add_new_album(self):
-        DownloadAlbumStructure.add_album(self.root, self.set_status)
+        def _on_created(album_id, fullname):
+            self.upload_album_id = album_id
+            self.upload_album_var.set(fullname)
+            self.set_status(f"Upload album set to: {fullname}")
+            self._persist_state()
+        DownloadAlbumStructure.add_album(self.root, self.set_status,
+                                         on_created_cb=_on_created)
 
     # -----------------------------------------------------------------------
     # Piwigo
