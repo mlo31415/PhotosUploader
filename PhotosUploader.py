@@ -2338,6 +2338,36 @@ class PhotosUploader:
         widget.mark_set('insert', '1.5')
         widget.focus_set()
 
+    _SHORTCUTS = [
+        ("Ctrl+O",         "Open / add photos"),
+        ("Ctrl+U / Ctrl+S","Upload current photo"),
+        ("Ctrl+Y",         "Crop photo"),
+        ("Ctrl+Z",         "Undo last edit"),
+        ("Ctrl+I",         "Open in IrfanView"),
+        ("Ctrl+L",         'Prepend "L-R: " to caption'),
+        ("Shift+Ctrl+L",   'Replace caption with "L-R: "'),
+        ("Ctrl+N",         'Add "Needs-ID" tag'),
+        ("Ctrl+H",         "Show this help"),
+    ]
+
+    def _show_shortcuts_help(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Keyboard Shortcuts")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        frame = ttk.Frame(dlg, padding=16)
+        frame.pack(fill='both', expand=True)
+        for row, (keys, desc) in enumerate(self._SHORTCUTS):
+            ttk.Label(frame, text=keys, font=("TkFixedFont", 10, "bold"),
+                      anchor='e').grid(row=row, column=0, sticky='e', padx=(0, 12), pady=2)
+            ttk.Label(frame, text=desc, anchor='w').grid(
+                row=row, column=1, sticky='w', pady=2)
+        ttk.Button(frame, text="Close", command=dlg.destroy).grid(
+            row=len(self._SHORTCUTS), column=0, columnspan=2, pady=(12, 0))
+        dlg.bind('<Escape>', lambda e: dlg.destroy())
+        dlg.bind('<Return>', lambda e: dlg.destroy())
+        self._center_dialog(dlg)
+
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
         self.root.bind('<Control-u>', lambda e: self._upload_current_photo())
@@ -2348,6 +2378,7 @@ class PhotosUploader:
         self.root.bind('<Control-l>', lambda e: self._insert_lr_prefix(replace=False))
         self.root.bind('<Control-L>', lambda e: self._insert_lr_prefix(replace=True))
         self.root.bind('<Control-n>', lambda e: self._add_needs_id_tag())
+        self.root.bind('<Control-h>', lambda e: self._show_shortcuts_help())
 
 
 # ---------------------------------------------------------------------------
