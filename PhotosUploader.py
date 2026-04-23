@@ -2317,6 +2317,27 @@ class PhotosUploader:
         except Exception as e:
             self.set_status(f"Could not open IrfanView: {e}")
 
+    def _add_needs_id_tag(self):
+        """Add 'Needs-ID' to the tags field if not already present."""
+        var = self.custom_vars.get('tags')
+        if var is None:
+            return
+        current = {t.strip() for t in var.get().split(',') if t.strip()}
+        if 'Needs-ID' not in current:
+            current.add('Needs-ID')
+            var.set(', '.join(sorted(current)))
+
+    def _insert_lr_prefix(self, replace: bool = False):
+        """Insert 'L-R: ' into the caption field, optionally clearing it first."""
+        widget = self.custom_vars.get('comments')
+        if widget is None:
+            return
+        if replace:
+            widget.delete('1.0', 'end')
+        widget.insert('1.0', 'L-R: ')
+        widget.mark_set('insert', '1.5')
+        widget.focus_set()
+
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
         self.root.bind('<Control-u>', lambda e: self._upload_current_photo())
@@ -2324,6 +2345,9 @@ class PhotosUploader:
         self.root.bind('<Control-y>', lambda e: self._crop_photo_viewer())
         self.root.bind('<Control-i>', lambda e: self._open_in_irfanview())
         self.root.bind('<Control-z>', lambda e: self._undo_edit_viewer())
+        self.root.bind('<Control-l>', lambda e: self._insert_lr_prefix(replace=False))
+        self.root.bind('<Control-L>', lambda e: self._insert_lr_prefix(replace=True))
+        self.root.bind('<Control-n>', lambda e: self._add_needs_id_tag())
 
 
 # ---------------------------------------------------------------------------
