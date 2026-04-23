@@ -1267,11 +1267,9 @@ class PhotosUploader:
             self._crop_start = None
             return
         px0, py0, px1, py1 = r
-        if event.x < px0 or event.x > px1 or event.y < py0 or event.y > py1:
-            self._crop_start = None
-            return
         self._clear_crop_rect()
-        self._crop_start = (event.x, event.y)
+        self._crop_start = (max(px0, min(event.x, px1)),
+                            max(py0, min(event.y, py1)))
 
     def _on_crop_drag(self, event):
         if self._crop_start is None:
