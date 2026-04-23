@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import threading
 import logging
+import subprocess
 import tkinter as tk
 from typing import Any
 from datetime import datetime
@@ -2366,10 +2367,33 @@ class PhotosUploader:
         self._persist_state()
         self.root.destroy()
 
+    _IRFANVIEW_PATHS = [
+        r"C:\Program Files\IrfanView\i_view64.exe",
+        r"C:\Program Files (x86)\IrfanView\i_view64.exe",
+    ]
+
+    def _open_in_irfanview(self):
+        if not self.current_photo:
+            return
+        exe = next((p for p in self._IRFANVIEW_PATHS if os.path.isfile(p)), None)
+        if exe is None:
+            exe = shutil.which("i_view64.exe")
+        if exe is None:
+            try:
+                os.startfile(self.current_photo)
+            except Exception as e:
+                self.set_status(f"Could not open image: {e}")
+            return
+        try:
+            subprocess.Popen([exe, self.current_photo, '/fs'])
+        except Exception as e:
+            self.set_status(f"Could not open IrfanView: {e}")
+
     def _bind_shortcuts(self):
         self.root.bind('<Control-o>', lambda e: self.add_photos_dialog())
         self.root.bind('<Control-u>', lambda e: self._upload_current_photo())
         self.root.bind('<Control-y>', lambda e: self._crop_photo_viewer())
+        self.root.bind('<Control-i>', lambda e: self._open_in_irfanview())
         self.root.bind('<Control-z>', lambda e: self._undo_edit_viewer())
 
 
