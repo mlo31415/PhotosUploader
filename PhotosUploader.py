@@ -918,7 +918,8 @@ class PhotosUploader:
             self.upload_album_var.set(fullname)
             self.set_status(f"Upload album set to: {fullname}")
         AlbumHierarchy.pick_album(self.root, self.set_status, on_select,
-                                          title="Select Upload Album")
+                                  title="Select Upload Album",
+                                  selected_id=self.upload_album_id)
 
     # -----------------------------------------------------------------------
     # Photo selection & display
