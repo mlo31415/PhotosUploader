@@ -302,6 +302,12 @@ class PhotosUploader:
             self.upload_album_id = int(self.state_data["upload_album_id"])
 
         self._build_ui()
+        # Restore photo_source persist state and value from previous session.
+        if self.state_data.get("photo_source_persist"):
+            self.persist_vars['photo_source'].set(True)
+            saved_source = self.state_data.get("photo_source_value", "")
+            if saved_source:
+                self.custom_vars['photo_source'].set(saved_source)
         # Attach tooltips to the three validated fields (widgets exist after _build_ui)
         self._tt_filename = _FieldTooltip(self.output_filename_entry)
         self._tt_date     = _FieldTooltip(self.date_entry)
@@ -2285,6 +2291,13 @@ class PhotosUploader:
         self.state_data["upload_album_id"] = self.upload_album_id
         # input_path is updated in-place by add_photos_dialog; just ensure the key exists
         self.state_data.setdefault("input_path", "")
+        # Persist the photo_source field: save both the checkbox state and the value.
+        # If persist is off, save empty string so it starts blank next session.
+        source_persist = self.persist_vars.get('photo_source')
+        persist_on = source_persist.get() if source_persist else False
+        self.state_data["photo_source_persist"] = persist_on
+        self.state_data["photo_source_value"]   = (
+            self.custom_vars['photo_source'].get().strip() if persist_on else "")
         save_state(self.state_data)
 
     def _on_close(self):
