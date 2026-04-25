@@ -59,6 +59,7 @@ try:
     import AlbumHierarchy
     import TagHandler
     import DateUtils
+    import PhotoRestoration
     AlbumHierarchy.PARAMS_FILE = _SCRIPT_DIR / "PhotosUploader Params.json"
 except Exception as _e:
     # In a windowed exe sys.exit() is silent; show a dialog before giving up.
@@ -167,9 +168,6 @@ CUSTOM_FIELDS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
 def is_image(path: str) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXTENSIONS
 
@@ -292,6 +290,17 @@ class PhotosUploader:
         self._auto_rename_field_was_empty = True  # tracks empty→non-empty transition
         self._last_auto_rename: dict | None = None  # set after a rename; cleared on skip-revert or next load
         self._tag_cache: list = [None]              # in-memory tag list cache for this session
+
+        # ── photo restoration state ──────────────────────────────────────────
+        self._restoration_base:    "Image.Image | None" = None
+        self._restore_after_id:    "str | None"         = None
+        self._restore_generation:  int                  = 0
+        self._restore_exposure_var = tk.DoubleVar(value=0.0)
+        self._restore_contrast_var = tk.DoubleVar(value=0.0)
+        self._restore_red_var      = tk.DoubleVar(value=0.0)
+        self._restore_sharpen_var  = tk.DoubleVar(value=0.0)
+        self._restore_val_vars:    dict = {}
+
         self.status_var = tk.StringVar(value="Ready.")
         self.upload_album_var = tk.StringVar(value="(none)")
         self.upload_album_id  = 0
@@ -592,6 +601,42 @@ class PhotosUploader:
         self.undo_btn = ttk.Button(rotate_frame, text="Undo",
                    command=self._undo_edit_viewer, state="disabled")
         self.undo_btn.pack(side="left", padx=2)
+
+        # ── Restoration sliders (shown when EXIF panel is hidden) ─────────────
+        restore_frame = ttk.LabelFrame(bottom_container, text="Photo Restoration", padding=4)
+        restore_frame.pack(fill="x", pady=(0, 4))
+        self._restore_frame = restore_frame
+
+        sliders_col = ttk.Frame(restore_frame)
+        sliders_col.pack(side="left", fill="x", expand=True)
+        btns_col = ttk.Frame(restore_frame)
+        btns_col.pack(side="left", fill="y", padx=(8, 0))
+
+        _restore_sliders = [
+            ("Exposure",  self._restore_exposure_var, -100, 100),
+            ("Contrast",  self._restore_contrast_var, -100, 100),
+            ("Red cast",  self._restore_red_var,         0, 100),
+            ("Sharpen",   self._restore_sharpen_var,     0, 100),
+        ]
+        self._restore_val_vars = {}
+        for label, dvar, lo, hi in _restore_sliders:
+            row = ttk.Frame(sliders_col)
+            row.pack(fill="x", pady=1)
+            ttk.Label(row, text=f"{label}:", width=9, anchor="e").pack(side="left", padx=(0, 4))
+            val_var = tk.StringVar(value="0")
+            self._restore_val_vars[label] = val_var
+            ttk.Label(row, textvariable=val_var, width=5, anchor="e").pack(side="left")
+            def _cmd(v, vv=val_var, dv=dvar):
+                vv.set(str(int(float(v))))
+                self._on_restoration_change()
+            ttk.Scale(row, from_=lo, to=hi, orient="horizontal",
+                      variable=dvar, command=_cmd).pack(side="left", fill="x", expand=True)
+
+        if not PhotoRestoration.CV2_AVAILABLE:
+            ttk.Label(btns_col, text="(requires\nopencv-python)",
+                      foreground="red", justify="center").pack(pady=(0, 4))
+        ttk.Button(btns_col, text="Revert\nRestoration",
+                   command=self._reset_restoration).pack()
 
         hpane = ttk.PanedWindow(bottom_container, orient="vertical")
         hpane.pack(fill="both", expand=True)
@@ -1193,6 +1238,7 @@ class PhotosUploader:
             return
         self.photo_label_var.set(os.path.basename(path))
         self._display_photo(path)
+        self._set_restoration_base()
         self._load_exif(path)
         self._load_iptc(path)
         self._apply_file_date_fallback(path)
@@ -1277,6 +1323,7 @@ class PhotosUploader:
             img = img.convert("RGB")
         # PIL rotates counter-clockwise, so negate for clockwise behaviour
         self._cached_image = img.rotate(-degrees, expand=True)
+        self._set_restoration_base()
         # Keep path/mtime so _display_photo uses the modified in-memory image
         self._display_photo(self.current_photo)
         direction = "right" if degrees == 90 else ("left" if degrees == -90 else "180°")
@@ -1363,6 +1410,7 @@ class PhotosUploader:
         self._edit_history.append(self._cached_image.copy())
         self.undo_btn.config(state="normal")
         self._cached_image = self._cached_image.crop((ix0, iy0, ix1, iy1))
+        self._set_restoration_base()
         self._clear_crop_rect()
         self._display_photo(self.current_photo)
         self.set_status(f"Cropped to {ix1 - ix0}\u00d7{iy1 - iy0} px")
@@ -1373,10 +1421,85 @@ class PhotosUploader:
             return
         self._cached_image = self._edit_history.pop()
         self._clear_crop_rect()
+        self._set_restoration_base()
         self._display_photo(self.current_photo)
         if not self._edit_history:
             self.undo_btn.config(state="disabled")
         self.set_status("Undo applied.")
+
+    # -----------------------------------------------------------------------
+    # Photo restoration  (OpenCV)
+    # -----------------------------------------------------------------------
+    def _on_restoration_change(self, *_):
+        """Debounce: wait 120 ms after last slider move before processing."""
+        if self._restore_after_id is not None:
+            self.root.after_cancel(self._restore_after_id)
+        self._restore_after_id = self.root.after(120, self._apply_restoration_bg)
+
+    def _apply_restoration_bg(self):
+        """Kick off restoration in a background thread."""
+        self._restore_after_id = None
+        if not PhotoRestoration.CV2_AVAILABLE or self._restoration_base is None:
+            if not PhotoRestoration.CV2_AVAILABLE:
+                self.set_status("opencv-python not installed — pip install opencv-python")
+            return
+        self._restore_generation += 1
+        gen      = self._restore_generation
+        exposure = self._restore_exposure_var.get()
+        contrast = self._restore_contrast_var.get()
+        red_cast = self._restore_red_var.get()
+        sharpen  = self._restore_sharpen_var.get()
+        base     = self._restoration_base.copy()
+
+        def worker():
+            result = PhotoRestoration.opencv_restore(base, exposure, contrast, red_cast, sharpen)
+            self.root.after(0, lambda: self._apply_restoration_result(result, gen))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_restoration_result(self, result: "Image.Image", gen: int):
+        """Called on main thread when the background worker finishes."""
+        if gen != self._restore_generation:
+            return
+        self._cached_image = result
+        if self.current_photo:
+            self._display_photo(self.current_photo)
+
+    def _reset_restoration(self):
+        """Reset all restoration sliders and restore the base image."""
+        if self._restore_after_id is not None:
+            self.root.after_cancel(self._restore_after_id)
+            self._restore_after_id = None
+        self._restore_generation += 1
+        self._restore_exposure_var.set(0.0)
+        self._restore_contrast_var.set(0.0)
+        self._restore_red_var.set(0.0)
+        self._restore_sharpen_var.set(0.0)
+        for vv in self._restore_val_vars.values():
+            vv.set("0")
+        if self._restoration_base is not None:
+            self._cached_image = self._restoration_base.copy()
+            if self.current_photo:
+                self._display_photo(self.current_photo)
+        self.set_status("Restoration reverted.")
+
+    def _set_restoration_base(self):
+        """Snapshot the current image as the restoration baseline and reset sliders.
+        Call after any geometric edit or on photo load."""
+        if self._restore_after_id is not None:
+            self.root.after_cancel(self._restore_after_id)
+            self._restore_after_id = None
+        self._restore_generation += 1
+        self._restore_exposure_var.set(0.0)
+        self._restore_contrast_var.set(0.0)
+        self._restore_red_var.set(0.0)
+        self._restore_sharpen_var.set(0.0)
+        for vv in self._restore_val_vars.values():
+            vv.set("0")
+        if self._cached_image is not None:
+            self._restoration_base = self._cached_image.copy()
+        else:
+            self._restoration_base = None
 
     def _open_caption_editor(self, _event=None):
         """Open a popup showing the photo at a larger size with an editable caption.
@@ -1822,7 +1945,9 @@ class PhotosUploader:
             self._center_hpane.forget(self._exif_outer)
             self._exif_toggle_btn.configure(text="Show EXIF/Metadata")
             self._exif_shown = False
+            self._restore_frame.pack(fill="x", pady=(0, 4), before=self._center_hpane)
         else:
+            self._restore_frame.pack_forget()
             self._center_hpane.add(self._exif_outer, weight=8)
             self._exif_toggle_btn.configure(text="Hide EXIF/Metadata")
             self._exif_shown = True
@@ -1863,6 +1988,7 @@ class PhotosUploader:
         self._validate_caption_field()
         self._validate_date_field()
         self._validate_output_filename_field()
+        self._set_restoration_base()
 
     # -----------------------------------------------------------------------
     # Utilities
