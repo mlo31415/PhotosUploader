@@ -303,11 +303,14 @@ class PhotosUploader:
 
         self._build_ui()
         # Restore photo_source persist state and value from previous session.
-        if self.state_data.get("photo_source_persist"):
-            self.persist_vars['photo_source'].set(True)
-            saved_source = self.state_data.get("photo_source_value", "")
-            if saved_source:
-                self.custom_vars['photo_source'].set(saved_source)
+        # Deferred so all init traces have fired before we write the value.
+        def _restore_photo_source():
+            if self.state_data.get("photo_source_persist"):
+                self.persist_vars['photo_source'].set(True)
+                saved_source = self.state_data.get("photo_source_value", "")
+                if saved_source:
+                    self.custom_vars['photo_source'].set(saved_source)
+        self.root.after(0, _restore_photo_source)
         # Attach tooltips to the three validated fields (widgets exist after _build_ui)
         self._tt_filename = _FieldTooltip(self.output_filename_entry)
         self._tt_date     = _FieldTooltip(self.date_entry)
@@ -1849,7 +1852,10 @@ class PhotosUploader:
         self.canvas.delete('all')
         self._exif_data = {}
         self.exif_tree.delete(*self.exif_tree.get_children())
-        for widget in self.custom_vars.values():
+        source_persist = self.persist_vars.get('photo_source')
+        for key, widget in self.custom_vars.items():
+            if key == 'photo_source' and source_persist and source_persist.get():
+                continue
             if isinstance(widget, tk.Text):
                 widget.delete('1.0', "end")
             else:
