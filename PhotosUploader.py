@@ -290,6 +290,7 @@ class PhotosUploader:
         self._auto_rename_field_was_empty = True  # tracks empty→non-empty transition
         self._last_auto_rename: dict | None = None  # set after a rename; cleared on skip-revert or next load
         self._tag_cache: list = [None]              # in-memory tag list cache for this session
+        self.uploaded_info: dict[str, dict] = {}   # path → {image_id, album_id, output_filename}
 
         # ── photo restoration state ──────────────────────────────────────────
         self._restoration_base:    "Image.Image | None" = None
@@ -385,6 +386,9 @@ class PhotosUploader:
                    command=self.remove_all_input).pack(side="left", padx=2)
         ttk.Button(btn_row, text="↑", width=2, command=lambda: self._move_item(self.input_list, -1)).pack(side="left")
         ttk.Button(btn_row, text="↓", width=2, command=lambda: self._move_item(self.input_list, 1)).pack(side="left")
+        ttk.Separator(btn_row, orient="vertical").pack(side="left", fill="y", padx=4)
+        ttk.Button(btn_row, text="▲", width=2, command=self._nav_prev).pack(side="left")
+        ttk.Button(btn_row, text="▼", width=2, command=self._nav_next).pack(side="left")
         ttk.Button(btn_row, text="Sort", command=self.sort_input).pack(side="left", padx=2)
 
         # Count label
@@ -412,6 +416,8 @@ class PhotosUploader:
 
         self.input_list = lb
         lb.bind('<<ListboxSelect>>', self._on_input_select)
+        lb.bind('<Up>',   lambda e: (self._nav_prev(), "break")[1])
+        lb.bind('<Down>', lambda e: (self._nav_next(), "break")[1])
         if DND_AVAILABLE:
             lb.drop_target_register(DND_FILES)
             lb.dnd_bind('<<Drop>>', self._on_drop)
@@ -827,6 +833,13 @@ class PhotosUploader:
                         added += 1
         return added
 
+    def _listbox_label(self, path: str) -> str:
+        """Return the label to display for a queue entry."""
+        label = os.path.basename(path)
+        if path in self.uploaded_info:
+            label += "  (uploaded)"
+        return label
+
     def _find_name_conflict(self, path: str):
         """Return the existing input path whose basename matches path, or None."""
         name = os.path.basename(path)
@@ -903,7 +916,7 @@ class PhotosUploader:
             self.input_list.delete(idx)
 
         self.input_paths.append(path)
-        self.input_list.insert("end", os.path.basename(path))
+        self.input_list.insert("end", self._listbox_label(path))
         return True
 
     # -----------------------------------------------------------------------
@@ -915,7 +928,8 @@ class PhotosUploader:
             return
         first_removed = sel[0]
         for i in reversed(sel):
-            self.input_paths.pop(i)
+            removed = self.input_paths.pop(i)
+            self.uploaded_info.pop(removed, None)
             self.input_list.delete(i)
         self._update_counts()
         if self.input_paths:
@@ -931,6 +945,7 @@ class PhotosUploader:
 
     def remove_all_input(self):
         self.input_paths.clear()
+        self.uploaded_info.clear()
         self.input_list.delete(0, "end")
         self._clear_viewer()
         self._update_counts()
@@ -941,7 +956,7 @@ class PhotosUploader:
         self.input_paths.sort(key=lambda p: os.path.basename(p).lower())
         self.input_list.delete(0, "end")
         for p in self.input_paths:
-            self.input_list.insert("end", os.path.basename(p))
+            self.input_list.insert("end", self._listbox_label(p))
         # Re-select the current photo if there is one
         if self.current_photo and self.current_photo in self.input_paths:
             idx = self.input_paths.index(self.current_photo)
@@ -988,9 +1003,71 @@ class PhotosUploader:
                 return
             self._save_current_custom_fields()
             self.current_photo = selected_path
-            self._load_photo(self.current_photo)
+            if selected_path in self.uploaded_info:
+                self._download_and_load_uploaded(selected_path)
+            else:
+                self._load_photo(self.current_photo)
         else:
             self._update_button_states()
+
+    def _download_and_load_uploaded(self, path: str):
+        """Download a previously-uploaded photo from Piwigo and display it."""
+        info = self.uploaded_info.get(path, {})
+        image_id = info.get('image_id', 0)
+        if not image_id:
+            self._load_photo(path)  # fallback: local file still there
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Downloading…")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.protocol("WM_DELETE_WINDOW", lambda: None)
+        dlg_alive = [True]
+        dlg.bind("<Destroy>", lambda _e: dlg_alive.__setitem__(0, False))
+        ttk.Label(dlg, text=f"Downloading from Piwigo…",
+                  padding=(16, 12, 16, 8)).pack()
+        pbar = ttk.Progressbar(dlg, mode='indeterminate', length=260)
+        pbar.pack(padx=16, pady=(0, 12))
+        pbar.start(12)
+        self._center_dialog(dlg)
+
+        target_path = path  # local path to overwrite with downloaded content
+
+        def worker():
+            try:
+                params = AlbumHierarchy.load_params()
+                client = AlbumHierarchy.PiwigoClient(
+                    params['url'], params['username'], params['password'],
+                    verify_ssl=params.get('verify_ssl', True),
+                )
+                client.login(params['username'], params['password'])
+                content, _ = client.download_image(image_id)
+                client.logout()
+                with open(target_path, 'wb') as f:
+                    f.write(content)
+                self.root.after(0, lambda: finish_ok())
+            except Exception as exc:
+                self.root.after(0, lambda: finish_err(str(exc)))
+
+        def finish_ok():
+            if dlg_alive[0]:
+                pbar.stop(); dlg.grab_release(); dlg.destroy()
+            self._load_photo(target_path)
+
+        def finish_err(err):
+            if dlg_alive[0]:
+                pbar.stop(); dlg.grab_release(); dlg.destroy()
+            # Fall back to local file if it still exists, otherwise warn
+            if os.path.exists(path):
+                self._load_photo(path)
+            else:
+                messagebox.showwarning("Download Failed",
+                                       f"Could not download from Piwigo:\n{err}\n\n"
+                                       "The local file may have been moved or deleted.",
+                                       parent=self.root)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _skip_photo(self):
         """Skip the current photo and load the next one from the input queue."""
@@ -1019,7 +1096,8 @@ class PhotosUploader:
             self._last_auto_rename = None
 
         # Remove the current photo from the input queue
-        self.input_paths.pop(idx)
+        removed = self.input_paths.pop(idx)
+        self.uploaded_info.pop(removed, None)
         self.input_list.delete(idx)
         self._update_counts()
 
@@ -1035,6 +1113,47 @@ class PhotosUploader:
             self._clear_viewer()
             self.set_status("All photos have been skipped.")
         self._persist_state()
+
+    # -----------------------------------------------------------------------
+    # Queue navigation
+    # -----------------------------------------------------------------------
+    def _select_queue_index(self, idx: int):
+        """Select the item at idx in the input queue with smart scrolling."""
+        n = len(self.input_paths)
+        if n == 0 or idx < 0 or idx >= n:
+            return
+        lb = self.input_list
+        lb.selection_clear(0, "end")
+        lb.selection_set(idx)
+
+        # Smart scrolling: cursor moves down first half, then list scrolls, then cursor moves last
+        top_frac, bot_frac = lb.yview()
+        visible_count = max(1, round((bot_frac - top_frac) * n))
+        first_visible = round(top_frac * n)
+        mid_abs = first_visible + visible_count // 2
+        last_item = n - 1
+        last_visible = first_visible + visible_count - 1
+
+        if idx <= mid_abs or last_visible >= last_item:
+            lb.see(idx)
+        else:
+            target_top = idx - visible_count // 2
+            target_top = max(0, min(target_top, last_item - visible_count + 1))
+            lb.yview_moveto(target_top / n)
+
+    def _nav_prev(self, _event=None):
+        """Move selection to the previous item in the input queue."""
+        sel = self.input_list.curselection()
+        idx = sel[0] - 1 if sel else len(self.input_paths) - 1
+        if 0 <= idx < len(self.input_paths):
+            self._select_queue_index(idx)
+
+    def _nav_next(self, _event=None):
+        """Move selection to the next item in the input queue."""
+        sel = self.input_list.curselection()
+        idx = sel[0] + 1 if sel else 0
+        if 0 <= idx < len(self.input_paths):
+            self._select_queue_index(idx)
 
     def _revert_photo(self):
         """Create a new, unchanged copy of the photo (prefer original from input queue).
@@ -1141,6 +1260,19 @@ class PhotosUploader:
         text = self.auto_rename_var.get().strip()
         if not text:
             self._auto_rename_pending = None
+            return path
+
+        # Already uploaded — do not rename again; use the name it had at upload time
+        if path in self.uploaded_info:
+            stored_name = self.uploaded_info[path].get('output_filename', '')
+            if stored_name:
+                self._auto_rename_pending = {
+                    'caption':         os.path.splitext(os.path.basename(path))[0],
+                    'output_filename': stored_name,
+                }
+            else:
+                self._auto_rename_pending = None
+            self._last_auto_rename = None
             return path
 
         # First file after box gained a value → ask for confirmation
@@ -2356,22 +2488,24 @@ class PhotosUploader:
 
         def finish_ok(image_id):
             close_progress()
-            # Remove the uploaded file from the input list and move to next
             queue_path = original_path if original_path in self.input_paths else path
             if queue_path in self.input_paths:
                 idx = self.input_paths.index(queue_path)
-                self.input_paths.pop(idx)
+                # Mark as uploaded (keep in queue)
+                self.uploaded_info[queue_path] = {
+                    'image_id': image_id,
+                    'album_id': album_id,
+                    'output_filename': output_filename,
+                }
                 self.input_list.delete(idx)
-                self._update_counts()
-                if self.input_paths:
-                    next_idx = min(idx, len(self.input_paths) - 1)
-                    self.input_list.selection_clear(0, "end")
-                    self.input_list.selection_set(next_idx)
-                    self.input_list.see(next_idx)
+                self.input_list.insert(idx, self._listbox_label(queue_path))
+                # Move selection to the next item (or stay on last)
+                next_idx = min(idx + 1, len(self.input_paths) - 1)
+                self.input_list.selection_clear(0, "end")
+                self._select_queue_index(next_idx)
+                if next_idx != idx:
                     self.current_photo = self.input_paths[next_idx]
                     self._load_photo(self.current_photo)
-                else:
-                    self._clear_viewer()
 
             self._record_upload(path, album, album_id=album_id, file_id=image_id)
             self.set_status(
@@ -2473,6 +2607,16 @@ class PhotosUploader:
             current.add('Needs-ID')
             var.set(', '.join(sorted(current)))
 
+    def _remove_needs_id_tag(self):
+        """Remove 'Needs-ID' from the tags field if present."""
+        var = self.custom_vars.get('tags')
+        if var is None:
+            return
+        current = {t.strip() for t in var.get().split(',') if t.strip()}
+        if 'Needs-ID' in current:
+            current.discard('Needs-ID')
+            var.set(', '.join(sorted(current)))
+
     def _insert_lr_prefix(self, replace: bool = False):
         """Insert 'L-R: ' into the caption field, optionally clearing it first."""
         widget = self.custom_vars.get('comments')
@@ -2487,12 +2631,15 @@ class PhotosUploader:
     _SHORTCUTS = [
         ("Ctrl+O",         "Open / add photos"),
         ("Ctrl+U / Ctrl+S","Upload current photo"),
+        ("↑ / ▲ button",   "Select previous photo in queue"),
+        ("↓ / ▼ button",   "Select next photo in queue"),
         ("Ctrl+Y",         "Crop photo"),
         ("Ctrl+Z",         "Undo last edit"),
         ("Ctrl+I",         "Open in IrfanView"),
         ("Ctrl+L",         'Prepend "L-R: " to caption'),
         ("Shift+Ctrl+L",   'Replace caption with "L-R: "'),
         ("Ctrl+N",         'Add "Needs-ID" tag'),
+        ("Shift+Ctrl+N",   'Remove "Needs-ID" tag'),
         ("Ctrl+H",         "Show this help"),
     ]
 
@@ -2524,7 +2671,16 @@ class PhotosUploader:
         self.root.bind('<Control-l>', lambda e: self._insert_lr_prefix(replace=False))
         self.root.bind('<Control-L>', lambda e: self._insert_lr_prefix(replace=True))
         self.root.bind('<Control-n>', lambda e: self._add_needs_id_tag())
+        self.root.bind('<Control-N>', lambda e: self._remove_needs_id_tag())
         self.root.bind('<Control-h>', lambda e: self._show_shortcuts_help())
+
+        def _maybe_nav(direction, event):
+            fw = self.root.focus_get()
+            if isinstance(fw, (tk.Entry, tk.Text)):
+                return
+            direction()
+        self.root.bind('<Up>',   lambda e: _maybe_nav(self._nav_prev, e))
+        self.root.bind('<Down>', lambda e: _maybe_nav(self._nav_next, e))
 
 
 # ---------------------------------------------------------------------------
