@@ -292,7 +292,8 @@ class PhotosUploader:
         self._tag_cache: list = [None]              # in-memory tag list cache for this session
         self.uploaded_info: dict[str, dict] = {}    # path → {image_id, album_id, output_filename}
         self._auto_renamed_paths: dict[str, dict] = {}  # new_path → {caption, output_filename}
-        self._dirty_paths: set[str] = set()         # paths not yet uploaded (or modified since)
+        self._dirty_paths: set[str]       = set()  # unuploaded (or re-modified) — remove warnings
+        self._user_edited_paths: set[str] = set()  # user manually changed fields/image — nav warnings
         self._loading_fields: bool  = False         # True while _load_photo is populating fields
         self._nav_guard:     bool   = False         # True while _nav_prev/next already checked ok
 
@@ -959,6 +960,7 @@ class PhotosUploader:
             self.uploaded_info.pop(removed, None)
             self._auto_renamed_paths.pop(removed, None)
             self._dirty_paths.discard(removed)
+            self._user_edited_paths.discard(removed)
             self.input_list.delete(i)
         self._update_counts()
         if self.input_paths:
@@ -985,6 +987,7 @@ class PhotosUploader:
         self.uploaded_info.clear()
         self._auto_renamed_paths.clear()
         self._dirty_paths.clear()
+        self._user_edited_paths.clear()
         self.input_list.delete(0, "end")
         self._clear_viewer()
         self._update_counts()
@@ -1146,6 +1149,7 @@ class PhotosUploader:
         removed = self.input_paths.pop(idx)
         self.uploaded_info.pop(removed, None)
         self._dirty_paths.discard(removed)
+        self._user_edited_paths.discard(removed)
         self.input_list.delete(idx)
         self._update_counts()
 
@@ -1384,10 +1388,11 @@ class PhotosUploader:
                 'output_filename': new_output_filename,
             }
 
-            # Transfer dirty flag from old path to new path
+            # Transfer dirty flag from old path to new path (auto-rename is not a user edit)
             if path in self._dirty_paths:
                 self._dirty_paths.discard(path)
                 self._dirty_paths.add(new_path)
+            self._user_edited_paths.discard(path)  # rename itself is not a user edit
 
             idx = self.input_paths.index(path)
             self.input_paths[idx] = new_path
@@ -2274,12 +2279,13 @@ class PhotosUploader:
         self._update_button_states()
 
     def _mark_current_dirty(self):
-        """Mark the current photo as needing upload (called when fields are edited)."""
+        """Mark the current photo as modified by the user (fields/image edited)."""
         if self._loading_fields or not self.current_photo:
             return
         path = self.current_photo
         was_clean = path not in self._dirty_paths
         self._dirty_paths.add(path)
+        self._user_edited_paths.add(path)
         if was_clean and path in self.uploaded_info and path in self.input_paths:
             idx = self.input_paths.index(path)
             self.input_list.delete(idx)
@@ -2289,14 +2295,14 @@ class PhotosUploader:
     def _ok_to_leave_current(self) -> bool:
         """Return True if it's safe to navigate away from the current photo.
 
-        If the current photo is unuploaded/modified, shows a warning dialog.
-        Returns False (and keeps selection) if the user chooses to stay.
+        Warns only when the user has manually edited fields or the image since
+        the last upload.  Auto-rename alone does not trigger this warning.
         """
-        if not self.current_photo or self.current_photo not in self._dirty_paths:
+        if not self.current_photo or self.current_photo not in self._user_edited_paths:
             return True
         answer = messagebox.askyesno(
             "Photo Not Uploaded",
-            f'"{os.path.basename(self.current_photo)}" has not been uploaded.\n\n'
+            f'"{os.path.basename(self.current_photo)}" has been modified but not uploaded.\n\n'
             "Leave without uploading?",
             default=messagebox.NO,
             parent=self.root,
@@ -2609,6 +2615,7 @@ class PhotosUploader:
                     'output_filename': output_filename,
                 }
                 self._dirty_paths.discard(queue_path)
+                self._user_edited_paths.discard(queue_path)
                 self.input_list.delete(idx)
                 self.input_list.insert(idx, self._listbox_label(queue_path))
 
@@ -2619,6 +2626,7 @@ class PhotosUploader:
                     self.uploaded_info.clear()
                     self._auto_renamed_paths.clear()
                     self._dirty_paths.clear()
+                    self._user_edited_paths.clear()
                     self.input_list.delete(0, "end")
                     self._update_counts()
                     self._clear_viewer()
