@@ -298,6 +298,7 @@ class PhotosUploader:
         self._user_edited_paths: set[str] = set()  # user manually changed fields/image — nav warnings
         self._loading_fields: bool  = False         # True while _load_photo is populating fields
         self._nav_guard:     bool   = False         # True while _nav_prev/next already checked ok
+        self._resetting_sliders: bool = False       # True while _set_restoration_base resets sliders
 
         # ── photo restoration state ──────────────────────────────────────────
         self._restoration_base:    "Image.Image | None" = None
@@ -1543,6 +1544,9 @@ class PhotosUploader:
             img = img.convert("RGB")
         # PIL rotates counter-clockwise, so negate for clockwise behaviour
         self._cached_image = img.rotate(-degrees, expand=True)
+        self.photo_dim_var.set(
+            f"{self._cached_image.width} \u00d7 {self._cached_image.height} px"
+            f"  |  {self._cached_image.mode}")
         self._set_restoration_base()
         # Keep path/mtime so _display_photo uses the modified in-memory image
         self._display_photo(self.current_photo)
@@ -1653,6 +1657,8 @@ class PhotosUploader:
     # -----------------------------------------------------------------------
     def _on_restoration_change(self, *_):
         """Debounce: wait 120 ms after last slider move before processing."""
+        if self._resetting_sliders:
+            return
         if self._restore_after_id is not None:
             self.root.after_cancel(self._restore_after_id)
         self._restore_after_id = self.root.after(120, self._apply_restoration_bg)
@@ -1692,12 +1698,16 @@ class PhotosUploader:
             self.root.after_cancel(self._restore_after_id)
             self._restore_after_id = None
         self._restore_generation += 1
-        self._restore_exposure_var.set(0.0)
-        self._restore_contrast_var.set(0.0)
-        self._restore_red_var.set(0.0)
-        self._restore_sharpen_var.set(0.0)
-        for vv in self._restore_val_vars.values():
-            vv.set("0")
+        self._resetting_sliders = True
+        try:
+            self._restore_exposure_var.set(0.0)
+            self._restore_contrast_var.set(0.0)
+            self._restore_red_var.set(0.0)
+            self._restore_sharpen_var.set(0.0)
+            for vv in self._restore_val_vars.values():
+                vv.set("0")
+        finally:
+            self._resetting_sliders = False
         if self._restoration_base is not None:
             self._cached_image = self._restoration_base.copy()
             if self.current_photo:
@@ -1711,12 +1721,16 @@ class PhotosUploader:
             self.root.after_cancel(self._restore_after_id)
             self._restore_after_id = None
         self._restore_generation += 1
-        self._restore_exposure_var.set(0.0)
-        self._restore_contrast_var.set(0.0)
-        self._restore_red_var.set(0.0)
-        self._restore_sharpen_var.set(0.0)
-        for vv in self._restore_val_vars.values():
-            vv.set("0")
+        self._resetting_sliders = True
+        try:
+            self._restore_exposure_var.set(0.0)
+            self._restore_contrast_var.set(0.0)
+            self._restore_red_var.set(0.0)
+            self._restore_sharpen_var.set(0.0)
+            for vv in self._restore_val_vars.values():
+                vv.set("0")
+        finally:
+            self._resetting_sliders = False
         if self._cached_image is not None:
             self._restoration_base = self._cached_image.copy()
         else:
