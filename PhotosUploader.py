@@ -290,7 +290,11 @@ class PhotosUploader:
         self._auto_rename_field_was_empty = True  # tracks empty→non-empty transition
         self._last_auto_rename: dict | None = None  # set after a rename; cleared on skip-revert or next load
         self._tag_cache: list = [None]              # in-memory tag list cache for this session
-        self.uploaded_info: dict[str, dict] = {}   # path → {image_id, album_id, output_filename}
+        self.uploaded_info: dict[str, dict] = {}    # path → {image_id, album_id, output_filename}
+        self._auto_renamed_paths: dict[str, dict] = {}  # new_path → {caption, output_filename}
+        self._dirty_paths: set[str] = set()         # paths not yet uploaded (or modified since)
+        self._loading_fields: bool  = False         # True while _load_photo is populating fields
+        self._nav_guard:     bool   = False         # True while _nav_prev/next already checked ok
 
         # ── photo restoration state ──────────────────────────────────────────
         self._restoration_base:    "Image.Image | None" = None
@@ -746,6 +750,15 @@ class PhotosUploader:
 
         self.custom_vars['comments'].bind('<<Modified>>', _on_comments_changed)
 
+        # Mark current photo dirty whenever the user edits any custom field
+        def _on_comments_user_edit(_event=None):
+            self._mark_current_dirty()
+        self.custom_vars['comments'].bind('<<Modified>>', _on_comments_user_edit, add='+')
+
+        for _key, _widget in self.custom_vars.items():
+            if isinstance(_widget, tk.StringVar):
+                _widget.trace_add('write', lambda *_: self._mark_current_dirty())
+
         # ── EXIF / Metadata — pane added/removed from hpane to achieve true zero height
         exif_outer = ttk.LabelFrame(hpane, text="EXIF / Metadata", padding=6)
         self._exif_outer = exif_outer
@@ -836,7 +849,7 @@ class PhotosUploader:
     def _listbox_label(self, path: str) -> str:
         """Return the label to display for a queue entry."""
         label = os.path.basename(path)
-        if path in self.uploaded_info:
+        if path in self.uploaded_info and path not in self._dirty_paths:
             label += "  (uploaded)"
         return label
 
@@ -916,6 +929,7 @@ class PhotosUploader:
             self.input_list.delete(idx)
 
         self.input_paths.append(path)
+        self._dirty_paths.add(path)
         self.input_list.insert("end", self._listbox_label(path))
         return True
 
@@ -926,10 +940,25 @@ class PhotosUploader:
         sel = list(self.input_list.curselection())
         if not sel:
             return
+        unuploaded = [self.input_paths[i] for i in sel
+                      if self.input_paths[i] in self._dirty_paths]
+        if unuploaded:
+            names = "\n  • ".join(os.path.basename(p) for p in unuploaded[:10])
+            if len(unuploaded) > 10:
+                names += f"\n  … and {len(unuploaded) - 10} more"
+            if not messagebox.askyesno(
+                "Remove Unuploaded Photo(s)?",
+                f"The following photo(s) have not been uploaded:\n  • {names}\n\n"
+                "Remove them anyway?",
+                default=messagebox.NO, parent=self.root,
+            ):
+                return
         first_removed = sel[0]
         for i in reversed(sel):
             removed = self.input_paths.pop(i)
             self.uploaded_info.pop(removed, None)
+            self._auto_renamed_paths.pop(removed, None)
+            self._dirty_paths.discard(removed)
             self.input_list.delete(i)
         self._update_counts()
         if self.input_paths:
@@ -944,8 +973,18 @@ class PhotosUploader:
             self._clear_viewer()
 
     def remove_all_input(self):
+        unuploaded = [p for p in self.input_paths if p in self._dirty_paths]
+        if unuploaded:
+            if not messagebox.askyesno(
+                "Remove All — Unuploaded Photos?",
+                f"{len(unuploaded)} photo(s) have not been uploaded. Remove all anyway?",
+                default=messagebox.NO, parent=self.root,
+            ):
+                return
         self.input_paths.clear()
         self.uploaded_info.clear()
+        self._auto_renamed_paths.clear()
+        self._dirty_paths.clear()
         self.input_list.delete(0, "end")
         self._clear_viewer()
         self._update_counts()
@@ -1000,6 +1039,13 @@ class PhotosUploader:
             if selected_path == self.current_photo:
                 # Programmatic selection_set (e.g. after auto-rename updates the list
                 # entry) re-fires <<ListboxSelect>>.  The file is already loaded; skip.
+                return
+            if not self._nav_guard and not self._ok_to_leave_current():
+                # Restore selection to the currently-loaded photo
+                self.input_list.selection_clear(0, "end")
+                if self.current_photo in self.input_paths:
+                    self.input_list.selection_set(
+                        self.input_paths.index(self.current_photo))
                 return
             self._save_current_custom_fields()
             self.current_photo = selected_path
@@ -1087,6 +1133,7 @@ class PhotosUploader:
                 counts = self.state_data.setdefault("auto_rename_counts", {})
                 counts[info['prefix']] = info['counter'] - 1
                 save_state(self.state_data)
+                self._auto_renamed_paths.pop(info['new_path'], None)
                 self.input_paths[idx] = info['original_path']
                 self.input_list.delete(idx)
                 self.input_list.insert(idx, os.path.basename(info['original_path']))
@@ -1098,6 +1145,7 @@ class PhotosUploader:
         # Remove the current photo from the input queue
         removed = self.input_paths.pop(idx)
         self.uploaded_info.pop(removed, None)
+        self._dirty_paths.discard(removed)
         self.input_list.delete(idx)
         self._update_counts()
 
@@ -1143,17 +1191,29 @@ class PhotosUploader:
 
     def _nav_prev(self, _event=None):
         """Move selection to the previous item in the input queue."""
+        if not self._ok_to_leave_current():
+            return
         sel = self.input_list.curselection()
         idx = sel[0] - 1 if sel else len(self.input_paths) - 1
         if 0 <= idx < len(self.input_paths):
-            self._select_queue_index(idx)
+            self._nav_guard = True
+            try:
+                self._select_queue_index(idx)
+            finally:
+                self._nav_guard = False
 
     def _nav_next(self, _event=None):
         """Move selection to the next item in the input queue."""
+        if not self._ok_to_leave_current():
+            return
         sel = self.input_list.curselection()
         idx = sel[0] + 1 if sel else 0
         if 0 <= idx < len(self.input_paths):
-            self._select_queue_index(idx)
+            self._nav_guard = True
+            try:
+                self._select_queue_index(idx)
+            finally:
+                self._nav_guard = False
 
     def _revert_photo(self):
         """Create a new, unchanged copy of the photo (prefer original from input queue).
@@ -1262,6 +1322,12 @@ class PhotosUploader:
             self._auto_rename_pending = None
             return path
 
+        # Already auto-renamed this session — restore its fields, do not rename again
+        if path in self._auto_renamed_paths:
+            self._auto_rename_pending = dict(self._auto_renamed_paths[path])
+            self._last_auto_rename = None
+            return path
+
         # Already uploaded — do not rename again; use the name it had at upload time
         if path in self.uploaded_info:
             stored_name = self.uploaded_info[path].get('output_filename', '')
@@ -1313,6 +1379,15 @@ class PhotosUploader:
 
             self._last_auto_rename = {'original_path': path, 'new_path': new_path,
                                       'prefix': prefix, 'counter': counter}
+            self._auto_renamed_paths[new_path] = {
+                'caption':         original_stem,
+                'output_filename': new_output_filename,
+            }
+
+            # Transfer dirty flag from old path to new path
+            if path in self._dirty_paths:
+                self._dirty_paths.discard(path)
+                self._dirty_paths.add(new_path)
 
             idx = self.input_paths.index(path)
             self.input_paths[idx] = new_path
@@ -1365,24 +1440,28 @@ class PhotosUploader:
                 output_var.set(pending['output_filename'])
 
     def _load_photo(self, path: str):
-        path = self._handle_auto_rename(path)
-        if path is None:
-            return
-        self.photo_label_var.set(os.path.basename(path))
-        self._display_photo(path)
-        self._set_restoration_base()
-        self._load_exif(path)
-        self._load_iptc(path)
-        self._apply_file_date_fallback(path)
-        self._load_custom_fields(path)
-        self._apply_auto_rename_fields()   # must run after _load_custom_fields
-        self.path_var.set(path)
-        self._validate_caption_field()
-        self._validate_date_field()
-        self._validate_output_filename_field()
-        self.rotate_right_btn.config(state="normal")
-        self.rotate_left_btn.config(state="normal")
-        self.rotate_180_btn.config(state="normal")
+        self._loading_fields = True
+        try:
+            path = self._handle_auto_rename(path)
+            if path is None:
+                return
+            self.photo_label_var.set(os.path.basename(path))
+            self._display_photo(path)
+            self._set_restoration_base()
+            self._load_exif(path)
+            self._load_iptc(path)
+            self._apply_file_date_fallback(path)
+            self._load_custom_fields(path)
+            self._apply_auto_rename_fields()   # must run after _load_custom_fields
+            self.path_var.set(path)
+            self._validate_caption_field()
+            self._validate_date_field()
+            self._validate_output_filename_field()
+            self.rotate_right_btn.config(state="normal")
+            self.rotate_left_btn.config(state="normal")
+            self.rotate_180_btn.config(state="normal")
+        finally:
+            self._loading_fields = False
 
     def _display_photo(self, path: str):
         if not PIL_AVAILABLE:
@@ -1447,6 +1526,7 @@ class PhotosUploader:
         """Rotate the displayed photo clockwise by degrees (90, -90, or 180)."""
         if self._cached_image is None or not self.current_photo:
             return
+        self._mark_current_dirty()
         self._clear_crop_rect()
         self._edit_history.append(self._cached_image.copy())
         self.undo_btn.config(state="normal")
@@ -1539,6 +1619,7 @@ class PhotosUploader:
         if ix1 <= ix0 or iy1 <= iy0:
             self.set_status("Crop region too small.")
             return
+        self._mark_current_dirty()
         self._edit_history.append(self._cached_image.copy())
         self.undo_btn.config(state="normal")
         self._cached_image = self._cached_image.crop((ix0, iy0, ix1, iy1))
@@ -2192,6 +2273,36 @@ class PhotosUploader:
         self.input_count_var.set(f"{len(self.input_paths)} items")
         self._update_button_states()
 
+    def _mark_current_dirty(self):
+        """Mark the current photo as needing upload (called when fields are edited)."""
+        if self._loading_fields or not self.current_photo:
+            return
+        path = self.current_photo
+        was_clean = path not in self._dirty_paths
+        self._dirty_paths.add(path)
+        if was_clean and path in self.uploaded_info and path in self.input_paths:
+            idx = self.input_paths.index(path)
+            self.input_list.delete(idx)
+            self.input_list.insert(idx, self._listbox_label(path))
+            self.input_list.selection_set(idx)
+
+    def _ok_to_leave_current(self) -> bool:
+        """Return True if it's safe to navigate away from the current photo.
+
+        If the current photo is unuploaded/modified, shows a warning dialog.
+        Returns False (and keeps selection) if the user chooses to stay.
+        """
+        if not self.current_photo or self.current_photo not in self._dirty_paths:
+            return True
+        answer = messagebox.askyesno(
+            "Photo Not Uploaded",
+            f'"{os.path.basename(self.current_photo)}" has not been uploaded.\n\n'
+            "Leave without uploading?",
+            default=messagebox.NO,
+            parent=self.root,
+        )
+        return answer
+
     def _set_initial_sash_positions(self):
         """Set sash positions so viewer gets ~43%, custom fields ~62%, EXIF ~38%."""
         total = self._center_vpane.winfo_height()
@@ -2491,14 +2602,31 @@ class PhotosUploader:
             queue_path = original_path if original_path in self.input_paths else path
             if queue_path in self.input_paths:
                 idx = self.input_paths.index(queue_path)
-                # Mark as uploaded (keep in queue)
+                # Mark as uploaded (keep in queue, mark clean)
                 self.uploaded_info[queue_path] = {
                     'image_id': image_id,
                     'album_id': album_id,
                     'output_filename': output_filename,
                 }
+                self._dirty_paths.discard(queue_path)
                 self.input_list.delete(idx)
                 self.input_list.insert(idx, self._listbox_label(queue_path))
+
+                # All photos uploaded — clear queue and announce
+                if not (self._dirty_paths & set(self.input_paths)):
+                    n = len(self.input_paths)
+                    self.input_paths.clear()
+                    self.uploaded_info.clear()
+                    self._auto_renamed_paths.clear()
+                    self._dirty_paths.clear()
+                    self.input_list.delete(0, "end")
+                    self._update_counts()
+                    self._clear_viewer()
+                    self.set_status(
+                        f"All {n} photo(s) uploaded — queue cleared.")
+                    self._record_upload(path, album, album_id=album_id, file_id=image_id)
+                    return
+
                 # Move selection to the next item (or stay on last)
                 next_idx = min(idx + 1, len(self.input_paths) - 1)
                 self.input_list.selection_clear(0, "end")
