@@ -2725,25 +2725,17 @@ class PhotosUploader:
         except Exception as e:
             self.set_status(f"Could not open IrfanView: {e}")
 
-    def _add_needs_id_tag(self):
-        """Add 'Needs-ID' to the tags field if not already present."""
-        var = self.custom_vars.get('tags')
-        if var is None:
-            return
-        current = {t.strip() for t in var.get().split(',') if t.strip()}
-        if 'Needs-ID' not in current:
-            current.add('Needs-ID')
-            var.set(', '.join(sorted(current)))
-
-    def _remove_needs_id_tag(self):
-        """Remove 'Needs-ID' from the tags field if present."""
+    def _toggle_needs_id_tag(self):
+        """Toggle 'Needs-ID' in the tags field."""
         var = self.custom_vars.get('tags')
         if var is None:
             return
         current = {t.strip() for t in var.get().split(',') if t.strip()}
         if 'Needs-ID' in current:
             current.discard('Needs-ID')
-            var.set(', '.join(sorted(current)))
+        else:
+            current.add('Needs-ID')
+        var.set(', '.join(sorted(current)))
 
     def _insert_lr_prefix(self, replace: bool = False):
         """Insert 'L-R: ' into the caption field, optionally clearing it first."""
@@ -2766,8 +2758,7 @@ class PhotosUploader:
         ("Ctrl+I",         "Open in IrfanView"),
         ("Ctrl+L",         'Prepend "L-R: " to caption'),
         ("Shift+Ctrl+L",   'Replace caption with "L-R: "'),
-        ("Ctrl+N",         'Add "Needs-ID" tag'),
-        ("Shift+Ctrl+N",   'Remove "Needs-ID" tag'),
+        ("Ctrl+N",         'Toggle "Needs-ID" tag'),
         ("Ctrl+H",         "Show this help"),
     ]
 
@@ -2798,8 +2789,7 @@ class PhotosUploader:
         self.root.bind('<Control-z>', lambda e: self._undo_edit_viewer())
         self.root.bind('<Control-l>', lambda e: self._insert_lr_prefix(replace=False))
         self.root.bind('<Control-L>', lambda e: self._insert_lr_prefix(replace=True))
-        self.root.bind('<Control-n>', lambda e: self._add_needs_id_tag())
-        self.root.bind('<Control-N>', lambda e: self._remove_needs_id_tag())
+        self.root.bind('<Control-n>', lambda e: self._toggle_needs_id_tag())
         self.root.bind('<Control-h>', lambda e: self._show_shortcuts_help())
 
         def _maybe_nav(direction, event):
