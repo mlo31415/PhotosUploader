@@ -180,7 +180,9 @@ def parse_dnd_paths(data: str) -> list[str]:
     i = 0
     while i < len(raw):
         if raw[i] == '{':
-            end = raw.index('}', i)
+            end = raw.find('}', i)
+            if end == -1:
+                break  # malformed — unclosed brace, stop parsing
             paths.append(raw[i+1:end])
             i = end + 1
         else:
@@ -237,7 +239,7 @@ class _FieldTooltip:
             self._after_id = None
 
     def _show(self):
-        if not self._msg:
+        if not self._msg or not self._widget.winfo_exists():
             return
         self._hide()
         x = self._widget.winfo_rootx() + 10
@@ -1014,12 +1016,9 @@ class PhotosUploader:
         if j < 0 or j >= listbox.size():
             return
         self.input_paths[i], self.input_paths[j] = self.input_paths[j], self.input_paths[i]
-        text_i = listbox.get(i)
-        text_j = listbox.get(j)
-        listbox.delete(i)
-        listbox.insert(i, text_j)
-        listbox.delete(j)
-        listbox.insert(j, text_i)
+        for pos in (min(i, j), max(i, j)):
+            listbox.delete(pos)
+            listbox.insert(pos, self._listbox_label(self.input_paths[pos]))
         listbox.selection_clear(0, "end")
         listbox.selection_set(j)
 
@@ -1394,7 +1393,12 @@ class PhotosUploader:
                 self._dirty_paths.add(new_path)
             self._user_edited_paths.discard(path)  # rename itself is not a user edit
 
-            idx = self.input_paths.index(path)
+            try:
+                idx = self.input_paths.index(path)
+            except ValueError:
+                # Path was removed from queue during rename (shouldn't happen, but be safe)
+                self._last_auto_rename = None
+                return new_path
             self.input_paths[idx] = new_path
             self.input_list.delete(idx)
             self.input_list.insert(idx, os.path.basename(new_path))
@@ -1456,12 +1460,11 @@ class PhotosUploader:
             self._load_exif(path)
             self._load_iptc(path)
             self._apply_file_date_fallback(path)
+            self._refresh_exif_tree()          # one call after all sources are merged
             self._load_custom_fields(path)
             self._apply_auto_rename_fields()   # must run after _load_custom_fields
             self.path_var.set(path)
-            self._validate_caption_field()
-            self._validate_date_field()
-            self._validate_output_filename_field()
+            self._validate_caption_field()     # Text <<Modified>> may not fire synchronously
             self.rotate_right_btn.config(state="normal")
             self.rotate_left_btn.config(state="normal")
             self.rotate_180_btn.config(state="normal")
@@ -1860,9 +1863,9 @@ class PhotosUploader:
         self._exif_data = {}
         if not PIL_AVAILABLE:
             return
+        owned = self._cached_image_path != path
         try:
-            img = (self._cached_image if self._cached_image_path == path
-                   else Image.open(path))  # type: ignore[possibly-undefined]
+            img = Image.open(path) if owned else self._cached_image  # type: ignore[possibly-undefined]
             if img is None:
                 return
             raw = img._getexif() if hasattr(img, '_getexif') else None
@@ -1881,6 +1884,9 @@ class PhotosUploader:
                 self.exif_tree.insert('', "end", values=('(No EXIF data)', ''))
         except Exception as e:
             self.exif_tree.insert('', "end", values=('Error reading EXIF', str(e)))
+        finally:
+            if owned and img is not None:
+                img.close()
 
     _MONTH_MAP      = DateUtils.MONTH_MAP
     _2DY_CUTOFF     = DateUtils.TWO_DIGIT_CUTOFF
@@ -1905,13 +1911,17 @@ class PhotosUploader:
         if not PIL_AVAILABLE:
             return
         iptc = {}
+        owned = self._cached_image_path != path
+        img = None
         try:
-            img = (self._cached_image if self._cached_image_path == path
-                   else Image.open(path))  # type: ignore[possibly-undefined]
+            img = Image.open(path) if owned else self._cached_image  # type: ignore[possibly-undefined]
             if img is not None:
                 iptc = IptcImagePlugin.getiptcinfo(img) or {}  # type: ignore[possibly-undefined]
         except Exception as e:
             logger.debug(f"Could not read IPTC data from {path}: {e}")
+        finally:
+            if owned and img is not None:
+                img.close()
 
         for link in self._field_links:
             # Read IPTC tag — may be a single bytes value or a list (e.g. Keywords)
@@ -1961,8 +1971,6 @@ class PhotosUploader:
                 self.custom_vars[link['custom_key']].set(value)
             finally:
                 link['syncing'] = False
-
-        self._refresh_exif_tree()
 
     def _on_exif_select(self, event):
         sel = self.exif_tree.selection()
@@ -2047,10 +2055,7 @@ class PhotosUploader:
 
         date_str = chosen.strftime('%Y:%m:%d %H:%M:%S')
         date_var.set(date_str)
-
-        # Keep the EXIF display tree in sync
         self._exif_data['Date Created'] = date_str
-        self._refresh_exif_tree()
 
     def _load_custom_fields(self, path: str):
         # Keys populated from IPTC on every load — don't clear these when
@@ -2458,7 +2463,6 @@ class PhotosUploader:
             return
 
         path = self.current_photo
-        original_path = path  # preserved for queue removal even if path is renamed
 
         try:
             params = AlbumHierarchy.load_params()
@@ -2605,45 +2609,46 @@ class PhotosUploader:
 
         def finish_ok(image_id):
             close_progress()
-            queue_path = original_path if original_path in self.input_paths else path
-            if queue_path in self.input_paths:
-                idx = self.input_paths.index(queue_path)
-                # Mark as uploaded (keep in queue, mark clean)
-                self.uploaded_info[queue_path] = {
-                    'image_id': image_id,
-                    'album_id': album_id,
-                    'output_filename': output_filename,
-                }
-                self._dirty_paths.discard(queue_path)
-                self._user_edited_paths.discard(queue_path)
-                self.input_list.delete(idx)
-                self.input_list.insert(idx, self._listbox_label(queue_path))
-
-                # All photos uploaded — clear queue and announce
-                if not (self._dirty_paths & set(self.input_paths)):
-                    n = len(self.input_paths)
-                    self.input_paths.clear()
-                    self.uploaded_info.clear()
-                    self._auto_renamed_paths.clear()
-                    self._dirty_paths.clear()
-                    self._user_edited_paths.clear()
-                    self.input_list.delete(0, "end")
-                    self._update_counts()
-                    self._clear_viewer()
-                    self.set_status(
-                        f"All {n} photo(s) uploaded — queue cleared.")
-                    self._record_upload(path, album, album_id=album_id, file_id=image_id)
-                    return
-
-                # Move selection to the next item (or stay on last)
-                next_idx = min(idx + 1, len(self.input_paths) - 1)
-                self.input_list.selection_clear(0, "end")
-                self._select_queue_index(next_idx)
-                if next_idx != idx:
-                    self.current_photo = self.input_paths[next_idx]
-                    self._load_photo(self.current_photo)
-
+            if path not in self.input_paths:
+                # Removed from queue while upload was in progress — just record it
+                self._record_upload(path, album, album_id=album_id, file_id=image_id)
+                self.set_status(
+                    f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
+                return
+            idx = self.input_paths.index(path)
+            # Mark as uploaded (keep in queue, mark clean)
+            self.uploaded_info[path] = {
+                'image_id': image_id,
+                'album_id': album_id,
+                'output_filename': output_filename,
+            }
+            self._dirty_paths.discard(path)
+            self._user_edited_paths.discard(path)
+            self.input_list.delete(idx)
+            self.input_list.insert(idx, self._listbox_label(path))
             self._record_upload(path, album, album_id=album_id, file_id=image_id)
+
+            # All photos uploaded — clear queue and announce
+            if not (self._dirty_paths & set(self.input_paths)):
+                n = len(self.input_paths)
+                self.input_paths.clear()
+                self.uploaded_info.clear()
+                self._auto_renamed_paths.clear()
+                self._dirty_paths.clear()
+                self._user_edited_paths.clear()
+                self.input_list.delete(0, "end")
+                self._update_counts()
+                self._clear_viewer()
+                self.set_status(f"All {n} photo(s) uploaded — queue cleared.")
+                return
+
+            # Move selection to the next item (or stay on last)
+            next_idx = min(idx + 1, len(self.input_paths) - 1)
+            self.input_list.selection_clear(0, "end")
+            self._select_queue_index(next_idx)
+            if next_idx != idx:
+                self.current_photo = self.input_paths[next_idx]
+                self._load_photo(self.current_photo)
             self.set_status(
                 f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
 
