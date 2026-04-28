@@ -288,12 +288,9 @@ class PhotosUploader:
         self._exif_data   = {}      # display-name -> value for the current photo
         self._field_validity = {'date': False, 'caption': False, 'filename': False}
         self._auto_rename_confirmed   = False  # user has ack'd the rename warning for current value
-        self._auto_rename_pending: dict | None = None  # caption/output set after _load_custom_fields
         self._auto_rename_field_was_empty = True  # tracks empty→non-empty transition
-        self._last_auto_rename: dict | None = None  # set after a rename; cleared on skip-revert or next load
         self._tag_cache: list = [None]              # in-memory tag list cache for this session
         self.uploaded_info: dict[str, dict] = {}    # path → {image_id, album_id, output_filename}
-        self._auto_renamed_paths: dict[str, dict] = {}  # new_path → {caption, output_filename}
         self._dirty_paths: set[str]       = set()  # unuploaded (or re-modified) — remove warnings
         self._user_edited_paths: set[str] = set()  # user manually changed fields/image — nav warnings
         self._loading_fields: bool  = False         # True while _load_photo is populating fields
@@ -961,7 +958,6 @@ class PhotosUploader:
         for i in reversed(sel):
             removed = self.input_paths.pop(i)
             self.uploaded_info.pop(removed, None)
-            self._auto_renamed_paths.pop(removed, None)
             self._dirty_paths.discard(removed)
             self._user_edited_paths.discard(removed)
             self.input_list.delete(i)
@@ -988,7 +984,6 @@ class PhotosUploader:
                 return
         self.input_paths.clear()
         self.uploaded_info.clear()
-        self._auto_renamed_paths.clear()
         self._dirty_paths.clear()
         self._user_edited_paths.clear()
         self.input_list.delete(0, "end")
@@ -1119,7 +1114,7 @@ class PhotosUploader:
         threading.Thread(target=worker, daemon=True).start()
 
     def _skip_photo(self):
-        """Skip the current photo and load the next one from the input queue."""
+        """Move to the next photo without uploading the current one (leaves it in queue)."""
         if not self.current_photo or not self.input_paths:
             return
         try:
@@ -1127,44 +1122,16 @@ class PhotosUploader:
         except ValueError:
             return
 
-        # If this photo was auto-renamed, undo the rename before discarding it
-        if (self._last_auto_rename and
-                self._last_auto_rename['new_path'] == self.current_photo):
-            info = self._last_auto_rename
-            try:
-                os.rename(info['new_path'], info['original_path'])
-                counts = self.state_data.setdefault("auto_rename_counts", {})
-                counts[info['prefix']] = info['counter'] - 1
-                save_state(self.state_data)
-                self._auto_renamed_paths.pop(info['new_path'], None)
-                self.input_paths[idx] = info['original_path']
-                self.input_list.delete(idx)
-                self.input_list.insert(idx, os.path.basename(info['original_path']))
-                self.current_photo = info['original_path']
-            except Exception as e:
-                self.set_status(f"Warning: could not revert rename: {e}")
-            self._last_auto_rename = None
+        next_idx = idx + 1
+        if next_idx >= len(self.input_paths):
+            self.set_status("Already at the last photo in the queue.")
+            return
 
-        # Remove the current photo from the input queue
-        removed = self.input_paths.pop(idx)
-        self.uploaded_info.pop(removed, None)
-        self._dirty_paths.discard(removed)
-        self._user_edited_paths.discard(removed)
-        self.input_list.delete(idx)
-        self._update_counts()
-
-        # Load the next photo if one exists
-        if self.input_paths:
-            next_idx = min(idx, len(self.input_paths) - 1)
-            self.input_list.selection_clear(0, "end")
-            self.input_list.selection_set(next_idx)
-            self.input_list.see(next_idx)
-            self.current_photo = self.input_paths[next_idx]
-            self._load_photo(self.current_photo)
-        else:
-            self._clear_viewer()
-            self.set_status("All photos have been skipped.")
-        self._persist_state()
+        self._save_current_custom_fields()
+        self.input_list.selection_clear(0, "end")
+        self._select_queue_index(next_idx)
+        self.current_photo = self.input_paths[next_idx]
+        self._load_photo(self.current_photo)
 
     # -----------------------------------------------------------------------
     # Queue navigation
@@ -1319,135 +1286,22 @@ class PhotosUploader:
         return counts.get(prefix, 99) + 1
 
     def _handle_auto_rename(self, path: str) -> str | None:
-        """Called at the start of _load_photo.
-        Returns the (possibly renamed) path to load, or None to cancel the load."""
-        text = self.auto_rename_var.get().strip()
-        if not text:
-            self._auto_rename_pending = None
+        """Load-time check: requests first-use confirmation only.
+        All rename work is deferred to upload time — nothing is touched here."""
+        if not self.auto_rename_var.get().strip():
             return path
-
-        # Already auto-renamed this session — restore its fields, do not rename again
-        if path in self._auto_renamed_paths:
-            self._auto_rename_pending = dict(self._auto_renamed_paths[path])
-            self._last_auto_rename = None
+        if self._auto_rename_confirmed or path in self.uploaded_info:
             return path
-
-        # Already uploaded — do not rename again; use the name it had at upload time
-        if path in self.uploaded_info:
-            stored_name = self.uploaded_info[path].get('output_filename', '')
-            if stored_name:
-                self._auto_rename_pending = {
-                    'caption':         os.path.splitext(os.path.basename(path))[0],
-                    'output_filename': stored_name,
-                }
-            else:
-                self._auto_rename_pending = None
-            self._last_auto_rename = None
-            return path
-
-        # First file after box gained a value → ask for confirmation
-        if not self._auto_rename_confirmed:
-            answer = messagebox.askyesno(
+        if not messagebox.askyesno(
                 "Auto Rename Active",
-                "Auto Renaming is in effect. The names of the input files will be "
-                "changed.\n\nPlease confirm you want this.",
-                parent=self.root,
-            )
-            if not answer:
-                # Leave file in queue, clear viewer, do nothing
-                self.input_list.selection_clear(0, "end")
-                self._clear_viewer()
-                return None
-            self._auto_rename_confirmed = True
-
-        original_basename = os.path.basename(path)
-        original_stem, original_ext = os.path.splitext(original_basename)
-
-        new_path            = path
-        new_output_filename = None
-        try:
-            prefix  = self._auto_rename_prefix()
-            counter = self._auto_rename_next_counter(prefix)
-            new_stem            = f"{prefix}{counter:05d}"
-            new_output_filename = new_stem + original_ext.lower()
-
-            # Rename the input file on disk: prepend "<new_stem> - " to its current name
-            src_dir      = os.path.dirname(path) or '.'
-            new_basename = new_stem + " - " + original_basename
-            new_path     = os.path.join(src_dir, new_basename)
-            os.rename(path, new_path)
-
-            # Persist counter only after rename succeeds
-            self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
-            save_state(self.state_data)
-
-            self._last_auto_rename = {'original_path': path, 'new_path': new_path,
-                                      'prefix': prefix, 'counter': counter}
-            self._auto_renamed_paths[new_path] = {
-                'caption':         original_stem,
-                'output_filename': new_output_filename,
-            }
-
-            # Transfer dirty flag from old path to new path (auto-rename is not a user edit)
-            if path in self._dirty_paths:
-                self._dirty_paths.discard(path)
-                self._dirty_paths.add(new_path)
-            self._user_edited_paths.discard(path)  # rename itself is not a user edit
-
-            try:
-                idx = self.input_paths.index(path)
-            except ValueError:
-                # Path was removed from queue during rename (shouldn't happen, but be safe)
-                self._last_auto_rename = None
-                return new_path
-            self.input_paths[idx] = new_path
-            self.input_list.delete(idx)
-            self.input_list.insert(idx, os.path.basename(new_path))
+                "Auto Renaming is in effect. File names will be changed at upload time.\n\n"
+                "Please confirm you want this.",
+                parent=self.root):
             self.input_list.selection_clear(0, "end")
-            self.input_list.selection_set(idx)
-            self.input_list.see(idx)
-            self.current_photo = new_path
-        except Exception as e:
-            new_path            = path
-            new_output_filename = None
-            self._last_auto_rename = None
-            messagebox.showerror("Auto Rename Failed",
-                                 f"Could not rename {original_basename}:\n{e}",
-                                 parent=self.root)
-
-        # Stash what to fill in after _load_custom_fields clears the fields
-        self._auto_rename_pending = {
-            'caption':         original_stem,   # original filename without extension
-            'output_filename': new_output_filename,
-        }
-        return new_path
-
-    def _apply_auto_rename_fields(self):
-        """Set caption (if empty) and output filename from the auto-rename stash.
-        Must be called after _load_custom_fields so it overwrites the cleared fields."""
-        if not self._auto_rename_pending:
-            return
-        pending = self._auto_rename_pending
-        self._auto_rename_pending = None
-
-        # Caption: set only if the field is empty and persist is not on
-        caption_widget = self.custom_vars.get('comments')
-        caption_persist = self.persist_vars.get('comments')
-        if caption_widget is not None and not (caption_persist and caption_persist.get()):
-            if isinstance(caption_widget, tk.Text):
-                if not caption_widget.get('1.0', 'end').strip():
-                    caption_widget.delete('1.0', 'end')
-                    caption_widget.insert('1.0', pending['caption'])
-                    caption_widget.edit_modified(False)
-            else:
-                if not caption_widget.get().strip():
-                    caption_widget.set(pending['caption'])
-
-        # Output filename: always set from auto-rename
-        if pending['output_filename']:
-            output_var = self.custom_vars.get('output_filename')
-            if output_var is not None:
-                output_var.set(pending['output_filename'])
+            self._clear_viewer()
+            return None
+        self._auto_rename_confirmed = True
+        return path
 
     def _load_photo(self, path: str):
         self._loading_fields = True
@@ -1461,11 +1315,10 @@ class PhotosUploader:
             self._load_exif(path)
             self._load_iptc(path)
             self._apply_file_date_fallback(path)
-            self._refresh_exif_tree()          # one call after all sources are merged
+            self._refresh_exif_tree()
             self._load_custom_fields(path)
-            self._apply_auto_rename_fields()   # must run after _load_custom_fields
             self.path_var.set(path)
-            self._validate_caption_field()     # Text <<Modified>> may not fire synchronously
+            self._validate_caption_field()
             self.rotate_right_btn.config(state="normal")
             self.rotate_left_btn.config(state="normal")
             self.rotate_180_btn.config(state="normal")
@@ -2575,6 +2428,52 @@ class PhotosUploader:
         # handing off to the worker — _cached_image is GUI state and must not
         # be read from a background thread.
         edited_image = self._cached_image.copy() if self._cached_image is not None else None
+        # If this photo was already uploaded, pass its image_id so Piwigo replaces
+        # the existing record rather than creating a duplicate.
+        existing_image_id = self.uploaded_info.get(path, {}).get('image_id') or None
+
+        # Auto-rename: calculate and execute at upload time (first upload only).
+        if self.auto_rename_var.get().strip() and path not in self.uploaded_info:
+            orig_basename = os.path.basename(path)
+            orig_stem, orig_ext = os.path.splitext(orig_basename)
+            try:
+                prefix   = self._auto_rename_prefix()
+                counter  = self._auto_rename_next_counter(prefix)
+                new_stem = f"{prefix}{counter:05d}"
+                new_output_filename = new_stem + orig_ext.lower()
+                new_basename        = new_stem + " - " + orig_basename
+                new_path = os.path.join(os.path.dirname(path) or '.', new_basename)
+                os.rename(path, new_path)
+                self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
+                try:
+                    save_state(self.state_data)
+                except Exception as sv_err:
+                    logger.warning(f"Could not persist auto-rename counter: {sv_err}")
+                # Update queue and tracking
+                try:
+                    r_idx = self.input_paths.index(path)
+                    self.input_paths[r_idx] = new_path
+                    self.input_list.delete(r_idx)
+                    self.input_list.insert(r_idx, self._listbox_label(new_path))
+                    self.input_list.selection_set(r_idx)
+                except ValueError:
+                    pass
+                if path in self.custom_data:
+                    self.custom_data[new_path] = self.custom_data.pop(path)
+                if path in self._dirty_paths:
+                    self._dirty_paths.discard(path)
+                    self._dirty_paths.add(new_path)
+                self._user_edited_paths.discard(path)
+                self.current_photo = new_path
+                path = new_path
+                output_filename = new_output_filename
+                self.custom_vars['output_filename'].set(new_output_filename)
+            except Exception as e:
+                close_progress()
+                messagebox.showerror("Auto Rename Failed",
+                                     f"Could not rename file before upload:\n{e}",
+                                     parent=self.root)
+                return
 
         def worker():
             # Prepare upload copy (resize + EXIF strip) inside the thread so the
@@ -2594,6 +2493,7 @@ class PhotosUploader:
                     upload_path, album_id,
                     name=output_filename, author=author, comment=comment,
                     tags=tags, date_creation=date_creation,
+                    image_id=existing_image_id,
                 )
                 image_id = int(result.get('image_id', 0))
                 if params.get('sync_metadata', True):
@@ -2647,7 +2547,6 @@ class PhotosUploader:
                 n = len(self.input_paths)
                 self.input_paths.clear()
                 self.uploaded_info.clear()
-                self._auto_renamed_paths.clear()
                 self._dirty_paths.clear()
                 self._user_edited_paths.clear()
                 self.input_list.delete(0, "end")
@@ -2655,6 +2554,10 @@ class PhotosUploader:
                 self._clear_viewer()
                 self.set_status(f"All {n} photo(s) uploaded — queue cleared.")
                 return
+
+            # Save the just-uploaded photo's custom fields before leaving it,
+            # so they are available if the user navigates back to re-upload it.
+            self._save_current_custom_fields()
 
             # Move selection to the next item (or stay on last)
             next_idx = min(idx + 1, len(self.input_paths) - 1)
