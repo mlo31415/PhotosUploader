@@ -411,6 +411,7 @@ class PhotosUploader:
                         yscrollcommand=yscroll.set,
                         xscrollcommand=xscroll.set,
                         activestyle='dotbox',
+                        exportselection=False,
                         font=('Consolas', 9))
         yscroll.config(command=lb.yview)
         xscroll.config(command=lb.xview)
