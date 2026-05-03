@@ -168,6 +168,17 @@ CUSTOM_FIELDS = [
 ]
 
 
+def _is_sensible_date(date_str: str) -> bool:
+    """True if date_str has a 4-digit year between 1927 and the current year inclusive.
+    Handles both EXIF format (YYYY:MM:DD ...) and IPTC format (YYYYMMDD).
+    """
+    import datetime as _dt
+    try:
+        return 1926 < int(date_str[:4]) <= _dt.date.today().year
+    except (ValueError, IndexError, TypeError):
+        return False
+
+
 def is_image(path: str) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXTENSIONS
 
@@ -325,6 +336,8 @@ class PhotosUploader:
                 saved_source = self.state_data.get("photo_source_value", "")
                 if saved_source:
                     self.custom_vars['photo_source'].set(saved_source)
+            if self.state_data.get("copy_filename_to_caption"):
+                self.auto_rename_caption_var.set(True)
         self.root.after(0, _restore_photo_source)
         # Attach tooltips to the three validated fields (widgets exist after _build_ui)
         self._tt_filename = _FieldTooltip(self.output_filename_entry)
@@ -564,6 +577,13 @@ class PhotosUploader:
         path_label.bind('<Configure>', _update_wraplength)
 
         # ── Auto Rename row ───────────────────────────────────────────────
+        copy_caption_row = ttk.Frame(left_col)
+        copy_caption_row.pack(side="bottom", fill="x")
+        self.auto_rename_caption_var = tk.BooleanVar(value=False)
+        self.auto_rename_caption_var.trace_add('write', lambda *_: self._on_copy_caption_toggled())
+        ttk.Checkbutton(copy_caption_row, text="Copy filename to caption",
+                        variable=self.auto_rename_caption_var).pack(side="left")
+
         auto_rename_row = ttk.Frame(left_col)
         auto_rename_row.pack(side="bottom", fill="x", pady=(6, 0))
         ttk.Label(auto_rename_row, text="Auto Rename:").pack(side="left", padx=(0, 4))
@@ -1046,12 +1066,16 @@ class PhotosUploader:
                     self.input_list.selection_set(
                         self.input_paths.index(self.current_photo))
                 return
+            if 'comments' in self.persist_vars:
+                self.persist_vars['comments'].set(False)
             self._save_current_custom_fields()
             self.current_photo = selected_path
             if selected_path in self.uploaded_info:
                 self._download_and_load_uploaded(selected_path)
             else:
                 self._load_photo(self.current_photo)
+                self._copy_filename_to_caption(self.current_photo)
+                self._apply_auto_rename_preview(self.current_photo)
         else:
             self._update_button_states()
 
@@ -1133,6 +1157,8 @@ class PhotosUploader:
         self._select_queue_index(next_idx)
         self.current_photo = self.input_paths[next_idx]
         self._load_photo(self.current_photo)
+        self._copy_filename_to_caption(self.current_photo)
+        self._apply_auto_rename_preview(self.current_photo)
 
     # -----------------------------------------------------------------------
     # Queue navigation
@@ -1305,6 +1331,9 @@ class PhotosUploader:
         return path
 
     def _load_photo(self, path: str):
+        # Snapshot dirty state before loading so we can undo spurious marks.
+        was_dirty       = path in self._dirty_paths
+        was_user_edited = path in self._user_edited_paths
         self._loading_fields = True
         try:
             path = self._handle_auto_rename(path)
@@ -1325,6 +1354,17 @@ class PhotosUploader:
             self.rotate_180_btn.config(state="normal")
         finally:
             self._loading_fields = False
+        # _load_custom_fields and _load_iptc write to tk.Text widgets, which
+        # queues <<Modified>> events that fire *after* _loading_fields is False.
+        # _mark_current_dirty then sees them as genuine user edits.  Schedule a
+        # one-tick cleanup to discard those spurious marks.
+        def _post_load_cleanup(p=path):
+            if self.current_photo == p:
+                if not was_dirty:
+                    self._dirty_paths.discard(p)
+                if not was_user_edited:
+                    self._user_edited_paths.discard(p)
+        self.root.after(0, _post_load_cleanup)
 
     def _display_photo(self, path: str):
         if not PIL_AVAILABLE:
@@ -1809,8 +1849,17 @@ class PhotosUploader:
             if link['custom_key'] == 'date_of_photo' and re.fullmatch(r'\d{8}', value):
                 value = f"{value[:4]}:{value[4:6]}:{value[6:8]}"
 
-            # Fall back to EXIF if IPTC tag is absent and an EXIF key is defined
-            if not value and link['exif_key'] is not None:
+            # For the photo date: prefer DateTimeOriginal (camera standard for "when taken");
+            # use IPTC only as a fallback when EXIF is absent and the year is plausible.
+            # For all other fields: keep original IPTC-first, EXIF-fallback behaviour.
+            if link['custom_key'] == 'date_of_photo':
+                exif_date = (self._exif_data.get(link['exif_key'], '')
+                             if link['exif_key'] else '')
+                if exif_date:
+                    value = exif_date
+                elif not _is_sensible_date(value):
+                    value = ''
+            elif not value and link['exif_key'] is not None:
                 value = self._exif_data.get(link['exif_key'], '')
 
             # Keep _exif_data in sync so the tree always shows the row
@@ -1893,12 +1942,11 @@ class PhotosUploader:
         if persist_var and persist_var.get():
             return
 
-        # If there is already a valid embedded date from 1980 onwards, keep it
+        # Keep any embedded date that is historically plausible (1927–present).
+        # The old ≥1980 threshold incorrectly discarded legitimate pre-1980 dates.
         existing = date_var.get().strip()
-        if existing:
-            parsed = self._parse_date(existing)
-            if parsed and parsed.year >= 1980:
-                return
+        if existing and _is_sensible_date(existing):
+            return
 
         # Gather filesystem timestamps
         try:
@@ -2111,11 +2159,51 @@ class PhotosUploader:
             self._tt_filename.disable()
         self._update_button_states()
 
+    def _on_copy_caption_toggled(self):
+        self._validate_caption_field()
+        if getattr(self, 'auto_rename_caption_var', None) and self.auto_rename_caption_var.get():
+            self._copy_filename_to_caption(self.current_photo)
+
+    def _apply_auto_rename_preview(self, path: str | None):
+        """If AR is on, pre-fill the OF box with the expected auto-renamed filename."""
+        if not path:
+            return
+        if not self.auto_rename_var.get().strip():
+            return
+        try:
+            prefix = self._auto_rename_prefix()
+            counter = self._auto_rename_next_counter(prefix)
+            stem = f"{prefix}{counter:05d}"
+            _orig_stem, orig_ext = os.path.splitext(os.path.basename(path))
+            preview = stem + (orig_ext.lower() or '.jpg')
+            self.custom_vars['output_filename'].set(preview)
+        except Exception:
+            pass
+
+    def _copy_filename_to_caption(self, path: str | None):
+        """If CF checkbox is on and caption is empty, populate caption from filename stem."""
+        if not getattr(self, 'auto_rename_caption_var', None):
+            return
+        if not self.auto_rename_caption_var.get():
+            return
+        if not path:
+            return
+        caption = self.custom_vars['comments'].get('1.0', 'end').strip()
+        if caption:
+            return
+        stem = os.path.splitext(os.path.basename(path))[0]
+        self.custom_vars['comments'].delete('1.0', 'end')
+        self.custom_vars['comments'].insert('1.0', stem)
+        self._validate_caption_field()
+
     def _validate_caption_field(self):
+
         """Require at least one non-blank character in Caption; update bg and button state."""
         widget = self.custom_vars['comments']
         value = widget.get('1.0', "end").strip()
-        valid = len(value) > 0
+        copy_var = getattr(self, 'auto_rename_caption_var', None)
+        will_copy = copy_var is not None and copy_var.get()
+        valid = len(value) > 0 or will_copy
         self._field_validity['caption'] = valid
         widget.config(bg='pink' if not valid else 'white')
         if not valid:
@@ -2567,6 +2655,8 @@ class PhotosUploader:
             if next_idx != idx:
                 self.current_photo = self.input_paths[next_idx]
                 self._load_photo(self.current_photo)
+                self._copy_filename_to_caption(self.current_photo)
+                self._apply_auto_rename_preview(self.current_photo)
             self.set_status(
                 f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
 
@@ -2623,6 +2713,7 @@ class PhotosUploader:
         self.state_data["photo_source_persist"] = persist_on
         self.state_data["photo_source_value"]   = (
             self.custom_vars['photo_source'].get().strip() if persist_on else "")
+        self.state_data["copy_filename_to_caption"] = self.auto_rename_caption_var.get()
         save_state(self.state_data)
 
     def _on_close(self):
