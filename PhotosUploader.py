@@ -60,7 +60,9 @@ try:
     import TagHandler
     import DateUtils
     import PhotoRestoration
+    from CredentialStore import CredentialStore, CredentialError
     AlbumHierarchy.PARAMS_FILE = _SCRIPT_DIR / "PhotosUploader Params.json"
+    _store = CredentialStore(_SCRIPT_DIR, "PhotosUploader Params.json")
 except Exception as _e:
     # In a windowed exe sys.exit() is silent; show a dialog before giving up.
     try:
@@ -534,9 +536,16 @@ class PhotosUploader:
         album_frame.bind("<Configure>", _refresh_album_display)
         self.upload_album_var.trace_add("write", _refresh_album_display)
 
+        # ── Content area: left column (exactly 50%) + canvas (exactly 50%) ─
+        content_frame = ttk.Frame(viewer_frame)
+        content_frame.pack(fill="both", expand=True)
+        content_frame.columnconfigure(0, weight=1, uniform="half")
+        content_frame.columnconfigure(1, weight=1, uniform="half")
+        content_frame.rowconfigure(0, weight=1)
+
         # ── Left column: nav buttons, filename, dims, path ───────────────
-        left_col = ttk.Frame(viewer_frame)
-        left_col.pack(side="left", fill="y", padx=(0, 6))
+        left_col = ttk.Frame(content_frame)
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
         self.upload_photo_btn = tk.Button(left_col, text="⬆ Upload to Piwigo",
                                           command=self._upload_current_photo,
@@ -592,10 +601,10 @@ class PhotosUploader:
         ttk.Entry(auto_rename_row, textvariable=self.auto_rename_var).pack(
             side="left", fill="x", expand=True)
 
-        # ── Canvas — right side, narrower ────────────────────────────────
-        self.canvas = tk.Canvas(viewer_frame, bg='#1a1a1a', cursor='crosshair',
+        # ── Canvas — right half, always at least 50% ─────────────────────
+        self.canvas = tk.Canvas(content_frame, bg='#1a1a1a', cursor='crosshair',
                                 height=200)
-        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.grid(row=0, column=1, sticky="nsew")
         self.canvas.bind('<Configure>',        self._on_canvas_resize)
         self.canvas.bind('<Control-Button-1>', self._open_caption_editor)
         self.canvas.bind('<Double-Button-1>',  self._open_caption_editor)
@@ -603,12 +612,6 @@ class PhotosUploader:
         self.canvas.bind('<B1-Motion>',        self._on_crop_drag)
         self.canvas.bind('<ButtonRelease-1>',  self._on_crop_release)
         self.canvas.bind('<Escape>',           self._clear_crop_rect)
-
-        def _enforce_canvas_min_width(event):
-            min_w = int(event.width * 0.60)
-            if self.canvas.winfo_width() < min_w:
-                self.canvas.configure(width=min_w)
-        viewer_frame.bind('<Configure>', _enforce_canvas_min_width)
 
         # ── Bottom pane: Rotate section + Custom Fields / EXIF ───────────
         bottom_container = ttk.Frame(vpane)
@@ -1105,12 +1108,12 @@ class PhotosUploader:
 
         def worker():
             try:
-                params = AlbumHierarchy.load_params()
+                creds = _store.load_credentials()
                 client = AlbumHierarchy.PiwigoClient(
-                    params['url'], params['username'], params['password'],
-                    verify_ssl=params.get('verify_ssl', True),
+                    creds['url'], creds['username'], creds['password'],
+                    verify_ssl=creds.get('verify_ssl', True),
                 )
-                client.login(params['username'], params['password'])
+                client.login(creds['username'], creds['password'])
                 content, _ = client.download_image(image_id)
                 client.logout()
                 with open(target_path, 'wb') as f:
@@ -2421,8 +2424,9 @@ class PhotosUploader:
         path = self.current_photo
 
         try:
-            params = AlbumHierarchy.load_params()
-        except (FileNotFoundError, ValueError) as exc:
+            creds  = _store.load_credentials()
+            params = _store.load_op_params()
+        except CredentialError as exc:
             messagebox.showerror("Configuration error", str(exc), parent=self.root)
             return
 
@@ -2571,12 +2575,12 @@ class PhotosUploader:
             upload_path = temp_path if temp_path else path
 
             client = AlbumHierarchy.PiwigoClient(
-                params['url'], params['username'], params['password'],
-                verify_ssl=params.get('verify_ssl', True),
+                creds['url'], creds['username'], creds['password'],
+                verify_ssl=creds.get('verify_ssl', True),
             )
             try:
                 set_stage("Logging in…")
-                client.login(params['username'], params['password'])
+                client.login(creds['username'], creds['password'])
                 set_stage(f"Uploading {output_filename}…")
                 result = client.upload_image(
                     upload_path, album_id,
