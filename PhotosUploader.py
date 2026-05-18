@@ -1576,8 +1576,11 @@ class PhotosUploader:
         base     = self._restoration_base.copy()
 
         def worker():
-            result = PhotoRestoration.opencv_restore(base, exposure, contrast, red_cast, sharpen)
-            self.root.after(0, lambda: self._apply_restoration_result(result, gen))
+            try:
+                result = PhotoRestoration.opencv_restore(base, exposure, contrast, red_cast, sharpen)
+                self.root.after(0, lambda: self._apply_restoration_result(result, gen))
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: self.set_status(f"Restoration error: {e}"))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2534,7 +2537,12 @@ class PhotosUploader:
                 counter  = self._auto_rename_next_counter(prefix)
                 new_stem = f"{prefix}{counter:05d}"
                 new_output_filename = new_stem + orig_ext.lower()
-                new_basename        = new_stem + " - " + orig_basename
+                _sep = " - "
+                _max_orig = 255 - len(new_stem) - len(_sep) - len(orig_ext)
+                if _max_orig <= 0:
+                    new_basename = new_stem + orig_ext.lower()
+                else:
+                    new_basename = new_stem + _sep + orig_stem[:_max_orig] + orig_ext
                 new_path = os.path.join(os.path.dirname(path) or '.', new_basename)
                 os.rename(path, new_path)
                 self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
