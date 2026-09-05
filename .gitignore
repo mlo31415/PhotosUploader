@@ -1,4 +1,28 @@
-/.venv/
-.idea
-InspectionProfiles
-misc.xml
+# Secrets and per-user config -- never commit
+Piwigo Credentials.json
+PhotosUploader Params.json
+
+# Python virtual environment
+.venv/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+
+# PyInstaller build artifacts.  PhotosUploader.spec and Build.bat are NOT artifacts --
+# the spec carries real build configuration and is worth tracking, so a rebuilt
+# exe is the same exe on any machine.
+build/
+dist/
+*.exe
+
+# IDE
+.idea/
+
+# Runtime logs
+*.log
+
+# Runtime / per-user state
+PhotosUploader State.json
+AlbumHierarchy.json
+FileDict.json
