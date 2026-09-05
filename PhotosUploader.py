@@ -2339,7 +2339,7 @@ class PhotosUploader:
     _JPEG_EXTENSIONS: frozenset[str] = frozenset({'.jpg', '.jpeg', '.jpe', '.jfif'})
 
     def _prepare_upload_copy(self, path: str, params: dict,
-                             source_image=None) -> str | None:
+                             source_image=None, upload_name: str = "") -> str | None:
         """Create a temp copy of the file for upload, optionally converted to JPEG,
         resized, and with EXIF stripped.
 
@@ -2350,8 +2350,13 @@ class PhotosUploader:
         downsampled so that width*height does not exceed that value.  Aspect ratio is
         preserved.
 
+        The copy is made in a temp directory of its own and named upload_name --
+        Piwigo stores the name of the file it is sent, so a copy named by
+        tempfile would land on the server as "tmp2qfmcfwp.jpg".  A directory to
+        itself lets it carry the real name without having to be made unique.
+
         Returns the path to the temp file, or None if preparation fails (caller should
-        fall back to the original file).  Caller is responsible for deleting the temp file.
+        fall back to the original file).  The caller deletes the directory.
         """
         if not PIL_AVAILABLE:
             return None
@@ -2361,8 +2366,15 @@ class PhotosUploader:
             is_jpeg = ext.lower() in self._JPEG_EXTENSIONS
             out_ext = ext if is_jpeg else '.jpg'
 
-            with tempfile.NamedTemporaryFile(suffix=out_ext, delete=False) as tmp:
-                temp_path = tmp.name
+            # The name Piwigo is told about is the name it should be sent under.
+            # It has been through _validate_output_filename_field, but this runs
+            # in a worker thread, so check it rather than trust it.
+            name = (upload_name or "").strip() or os.path.basename(path)
+            if self._ILLEGAL_FILENAME_CHARS.search(name) or name.endswith('.'):
+                name = os.path.basename(path)
+            if not os.path.splitext(name)[1]:
+                name += out_ext
+            temp_path = os.path.join(tempfile.mkdtemp(), name)
 
             save_kwargs = {} if is_jpeg else {'format': 'JPEG', 'quality': 92}
 
@@ -2395,8 +2407,10 @@ class PhotosUploader:
                 with Image.open(path) as src:  # type: ignore[possibly-undefined]
                     _process(src)
 
-            # Strip EXIF from temp copy (piexif only works on JPEG)
-            if PIEXIF_AVAILABLE and out_ext.lower() in self._JPEG_EXTENSIONS:
+            # Strip EXIF from temp copy (piexif only works on JPEG).  The copy's
+            # own extension is what decides it, now that it carries the photo's
+            # name rather than one derived from the source path.
+            if PIEXIF_AVAILABLE and os.path.splitext(temp_path)[1].lower() in self._JPEG_EXTENSIONS:
                 try:
                     piexif.insert(piexif.dump({}), temp_path)
                 except Exception:
@@ -2579,7 +2593,9 @@ class PhotosUploader:
         def worker():
             # Prepare upload copy (resize + EXIF strip) inside the thread so the
             # UI is never blocked and the progress dialog covers the full operation.
-            temp_path = self._prepare_upload_copy(path, params, source_image=edited_image)
+            temp_path = self._prepare_upload_copy(path, params,
+                                                  source_image=edited_image,
+                                                  upload_name=output_filename)
             upload_path = temp_path if temp_path else path
 
             client = AlbumHierarchy.PiwigoClient(
@@ -2616,11 +2632,9 @@ class PhotosUploader:
                 self.root.after(0, lambda: finish_err(err))
             finally:
                 client.logout()
-                if temp_path and os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except Exception:
-                        pass
+                if temp_path:
+                    # The copy has a directory to itself, so that goes too
+                    shutil.rmtree(os.path.dirname(temp_path), ignore_errors=True)
 
         def finish_ok(image_id):
             close_progress()
