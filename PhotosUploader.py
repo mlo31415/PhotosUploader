@@ -2421,6 +2421,65 @@ class PhotosUploader:
             self.set_status(f"Warning: could not create upload copy: {e}")
             return None
 
+    def _make_auto_rename_undo(self, old_path: str, new_path: str, prefix: str,
+                               counter: int, old_output_filename: str):
+        """Call just after the file is renamed for upload, before anything else
+        is changed.  Notes how things stood, and returns a function that puts
+        them back if the upload then fails: the file's name, the counter (so
+        the retry gets the same number), the queue entry, its custom fields,
+        whether it was dirty or edited, and the Output Filename box.
+
+        The function returns None, or a sentence for the user if the file
+        could not be renamed back -- in which case nothing else is undone
+        either, since the queue must keep naming the file that is on disk."""
+        old_count = self.state_data.get("auto_rename_counts", {}).get(prefix)
+        was_dirty = old_path in self._dirty_paths
+        was_user_edited = old_path in self._user_edited_paths
+
+        def undo() -> str | None:
+            try:
+                os.rename(new_path, old_path)
+            except OSError as e:
+                return (f"The file is still named {os.path.basename(new_path)}, "
+                        f"as it could not be renamed back:\n{e}")
+
+            counts: dict = self.state_data.setdefault("auto_rename_counts", {})
+            if counts.get(prefix) == counter:
+                if old_count is None:
+                    counts.pop(prefix, None)
+                else:
+                    counts[prefix] = old_count
+                try:
+                    save_state(self.state_data)
+                except Exception as sv_err:
+                    logger.warning(f"Could not persist auto-rename counter: {sv_err}")
+
+            if new_path in self.custom_data:
+                self.custom_data[old_path] = self.custom_data.pop(new_path)
+            self._dirty_paths.discard(new_path)
+            if was_dirty:
+                self._dirty_paths.add(old_path)
+            self._user_edited_paths.discard(new_path)
+            if was_user_edited:
+                self._user_edited_paths.add(old_path)
+
+            is_current = self.current_photo == new_path
+            if is_current:
+                # Before the queue changes, so the re-selection is not taken
+                # for a move to a different photo
+                self.current_photo = old_path
+                self.custom_vars['output_filename'].set(old_output_filename)
+            if new_path in self.input_paths:
+                r_idx = self.input_paths.index(new_path)
+                self.input_paths[r_idx] = old_path
+                self.input_list.delete(r_idx)
+                self.input_list.insert(r_idx, self._listbox_label(old_path))
+                if is_current:
+                    self.input_list.selection_set(r_idx)
+            return None
+
+        return undo
+
     def _upload_current_photo(self):
         """Upload the currently displayed photo to the selected Piwigo album."""
         if not self.current_photo:
@@ -2543,6 +2602,9 @@ class PhotosUploader:
         existing_image_id = self.uploaded_info.get(path, {}).get('image_id') or None
 
         # Auto-rename: calculate and execute at upload time (first upload only).
+        # If the upload then fails, undo_rename puts everything back, so that
+        # trying again renames the original file, not the renamed one.
+        undo_rename = None
         if self.auto_rename_var.get().strip() and path not in self.uploaded_info:
             orig_basename = os.path.basename(path)
             orig_stem, orig_ext = os.path.splitext(orig_basename)
@@ -2559,6 +2621,8 @@ class PhotosUploader:
                     new_basename = new_stem + _sep + orig_stem[:_max_orig] + orig_ext
                 new_path = os.path.join(os.path.dirname(path) or '.', new_basename)
                 os.rename(path, new_path)
+                undo_rename = self._make_auto_rename_undo(
+                    path, new_path, prefix, counter, output_filename)
                 self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
                 try:
                     save_state(self.state_data)
@@ -2585,24 +2649,29 @@ class PhotosUploader:
                 self.custom_vars['output_filename'].set(new_output_filename)
             except Exception as e:
                 close_progress()
+                # The rename may have happened before whatever failed
+                not_undone = undo_rename() if undo_rename else None
                 messagebox.showerror("Auto Rename Failed",
-                                     f"Could not rename file before upload:\n{e}",
+                                     f"Could not rename file before upload:\n{e}"
+                                     + (f"\n\n{not_undone}" if not_undone else ""),
                                      parent=self.root)
                 return
 
         def worker():
-            # Prepare upload copy (resize + EXIF strip) inside the thread so the
-            # UI is never blocked and the progress dialog covers the full operation.
-            temp_path = self._prepare_upload_copy(path, params,
-                                                  source_image=edited_image,
-                                                  upload_name=output_filename)
-            upload_path = temp_path if temp_path else path
-
-            client = AlbumHierarchy.PiwigoClient(
-                creds['url'], creds['username'], creds['password'],
-                verify_ssl=creds.get('verify_ssl', True),
-            )
+            temp_path = None
+            client = None
             try:
+                # Prepare upload copy (resize + EXIF strip) inside the thread so the
+                # UI is never blocked and the progress dialog covers the full operation.
+                temp_path = self._prepare_upload_copy(path, params,
+                                                      source_image=edited_image,
+                                                      upload_name=output_filename)
+                upload_path = temp_path if temp_path else path
+
+                client = AlbumHierarchy.PiwigoClient(
+                    creds['url'], creds['username'], creds['password'],
+                    verify_ssl=creds.get('verify_ssl', True),
+                )
                 set_stage("Logging in…")
                 client.login(creds['username'], creds['password'])
                 set_stage(f"Uploading {output_filename}…")
@@ -2631,7 +2700,8 @@ class PhotosUploader:
                 err = str(exc)
                 self.root.after(0, lambda: finish_err(err))
             finally:
-                client.logout()
+                if client is not None:
+                    client.logout()
                 if temp_path:
                     # The copy has a directory to itself, so that goes too
                     shutil.rmtree(os.path.dirname(temp_path), ignore_errors=True)
@@ -2688,8 +2758,10 @@ class PhotosUploader:
 
         def finish_err(err):
             close_progress()
+            not_undone = undo_rename() if undo_rename else None
             messagebox.showerror("Upload Failed",
-                                 f"Could not upload {output_filename}:\n\n{err}",
+                                 f"Could not upload {output_filename}:\n\n{err}"
+                                 + (f"\n\n{not_undone}" if not_undone else ""),
                                  parent=self.root)
             self.set_status(f"Upload failed: {output_filename}")
 
