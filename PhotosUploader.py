@@ -284,6 +284,12 @@ class PhotosUploader:
         self.root.geometry("1400x820")
         self.root.minsize(1000, 600)
 
+        # Title-bar/taskbar icon (bundled into the exe via the .spec); harmless no-op if missing or bad
+        try:
+            self.root.iconbitmap(str(Path(getattr(sys, "_MEIPASS", _SCRIPT_DIR)) / "PhotosUploader.ico"))
+        except Exception:
+            pass
+
         # State
         self.input_paths = []       # list of str
         self.current_photo = None   # str path
