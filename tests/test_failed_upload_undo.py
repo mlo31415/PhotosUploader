@@ -113,6 +113,10 @@ class _Fixture:
 
     def tearDown(self):
         try:
+            # The withdrawn window never gets a height, so the sash placement
+            # keeps re-scheduling itself; stop it outliving the window
+            for pending in self.root.tk.splitlist(self.root.tk.call('after', 'info')):
+                self.root.after_cancel(pending)
             self.root.destroy()
         except tk.TclError:
             pass

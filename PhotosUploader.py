@@ -1203,24 +1203,70 @@ class PhotosUploader:
         sel = self.input_list.curselection()
         idx = sel[0] - 1 if sel else len(self.input_paths) - 1
         if 0 <= idx < len(self.input_paths):
-            self._nav_guard = True
-            try:
-                self._select_queue_index(idx)
-            finally:
-                self._nav_guard = False
+            self._go_to_queue_index(idx)
+
+    def _go_to_queue_index(self, idx: int):
+        """Select idx in the queue and load its photo.  A selection made in
+        code raises no <<ListboxSelect>>, so _on_input_select is called here;
+        the leave-check has been done by the caller, hence the guard."""
+        self._nav_guard = True
+        try:
+            self._select_queue_index(idx)
+            self._on_input_select(None)
+        finally:
+            self._nav_guard = False
 
     def _nav_next(self, _event=None):
-        """Move selection to the next item in the input queue."""
+        """Move selection to the next item in the input queue.  Moving past the
+        last one is the end of the queue: see _end_of_queue."""
         if not self._ok_to_leave_current():
             return
         sel = self.input_list.curselection()
         idx = sel[0] + 1 if sel else 0
+        if sel and idx == len(self.input_paths):
+            self._end_of_queue()
+            return
         if 0 <= idx < len(self.input_paths):
-            self._nav_guard = True
-            try:
-                self._select_queue_index(idx)
-            finally:
-                self._nav_guard = False
+            self._go_to_queue_index(idx)
+
+    def _end_of_queue(self):
+        """The user has moved past the last photo.  If every photo is uploaded,
+        the queue is cleared, as after the last upload.  If not, offer to go to
+        the first one that isn't -- and declining clears the queue anyway."""
+        not_uploaded = [p for p in self.input_paths if p in self._dirty_paths]
+        if not not_uploaded:
+            self._clear_queue(f"All {len(self.input_paths)} photo(s) uploaded — queue cleared.")
+            return
+        names = "\n  • ".join(os.path.basename(p) for p in not_uploaded[:10])
+        if len(not_uploaded) > 10:
+            names += f"\n  … and {len(not_uploaded) - 10} more"
+        first = os.path.basename(not_uploaded[0])
+        answer = messagebox.askyesnocancel(
+            "End of Queue",
+            f"This is the end of the queue, but {len(not_uploaded)} photo(s) "
+            f"have not been uploaded:\n  • {names}\n\n"
+            f"Yes — go to the first of them ({first})\n"
+            "No — clear the queue anyway (the files themselves are not touched)\n"
+            "Cancel — stay where you are",
+            parent=self.root,
+        )
+        if answer is None:
+            return
+        if answer:
+            self._go_to_queue_index(self.input_paths.index(not_uploaded[0]))
+            return
+        self._clear_queue(f"Queue cleared — {len(not_uploaded)} photo(s) were not uploaded.")
+
+    def _clear_queue(self, status: str):
+        """Empty the input queue and the viewer, and say why in the status bar."""
+        self.input_paths.clear()
+        self.uploaded_info.clear()
+        self._dirty_paths.clear()
+        self._user_edited_paths.clear()
+        self.input_list.delete(0, "end")
+        self._update_counts()
+        self._clear_viewer()
+        self.set_status(status)
 
     def _revert_photo(self):
         """Create a new, unchanged copy of the photo (prefer original from input queue).
@@ -2735,15 +2781,7 @@ class PhotosUploader:
 
             # All photos uploaded — clear queue and announce
             if not (self._dirty_paths & set(self.input_paths)):
-                n = len(self.input_paths)
-                self.input_paths.clear()
-                self.uploaded_info.clear()
-                self._dirty_paths.clear()
-                self._user_edited_paths.clear()
-                self.input_list.delete(0, "end")
-                self._update_counts()
-                self._clear_viewer()
-                self.set_status(f"All {n} photo(s) uploaded — queue cleared.")
+                self._clear_queue(f"All {len(self.input_paths)} photo(s) uploaded — queue cleared.")
                 return
 
             # Save the just-uploaded photo's custom fields before leaving it,
