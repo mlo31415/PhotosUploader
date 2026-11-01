@@ -154,6 +154,49 @@ class SomeNotUploaded(_Queue, unittest.TestCase):
         self.assertEqual(len(self.app.input_paths), 2)
 
 
+class SkipOnTheLast(_Queue, unittest.TestCase):
+    """Skip on the last photo does what Down does."""
+
+    def skip(self):
+        self.app._skip_photo()
+        self.root.update()
+
+    def test_all_uploaded_clears_the_queue(self):
+        paths = self.fill("a.jpg", "b.jpg")
+        self.uploaded(*paths)
+        self.skip()
+        self.skip()
+        self.assertEqual(self.app.input_paths, [])
+        self.assertEqual(self.app.status_var.get(), "All 2 photo(s) uploaded — queue cleared.")
+
+    def test_yes_goes_to_the_first_not_uploaded(self):
+        paths = self.fill("a.jpg", "b.jpg", "c.jpg")
+        self.uploaded(paths[0], paths[2])
+        self.answer = True
+        self.skip()
+        self.skip()
+        self.skip()
+        self.assertEqual(len(self.asked), 1)
+        self.assertEqual(self.app.current_photo, paths[1])
+        self.assertEqual(self.app.photo_label_var.get(), "b.jpg")
+
+    def test_no_clears_the_queue_anyway(self):
+        self.fill("a.jpg", "b.jpg")
+        self.answer = False
+        self.skip()
+        self.skip()
+        self.assertEqual(self.app.input_paths, [])
+        self.assertIn("2 photo(s) were not uploaded", self.app.status_var.get())
+
+    def test_cancel_stays_on_the_last(self):
+        paths = self.fill("a.jpg", "b.jpg")
+        self.answer = None
+        self.skip()
+        self.skip()
+        self.assertEqual(self.app.current_photo, paths[1])
+        self.assertEqual(len(self.app.input_paths), 2)
+
+
 class AfterAnUploadStill(_Queue, unittest.TestCase):
     """The clearing after the last upload now shares _clear_queue."""
 

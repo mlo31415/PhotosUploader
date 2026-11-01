@@ -1158,7 +1158,7 @@ class PhotosUploader:
 
         next_idx = idx + 1
         if next_idx >= len(self.input_paths):
-            self.set_status("Already at the last photo in the queue.")
+            self._end_of_queue()
             return
 
         self._save_current_custom_fields()
