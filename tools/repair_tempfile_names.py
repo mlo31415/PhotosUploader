@@ -22,7 +22,8 @@ As surveyed on 2026-09-05: 12,558 photos over 595 albums, 1,481 stored under a
 tempfile name, 1,420 of them repairable.  The other 61 have a title that is
 itself a *different* tempfile name -- a photo uploaded twice through the broken
 path, the second upload taking the first's temp name as its title.  Piwigo no
-longer holds their real name; it may survive in FileDict.json or in the
+longer holds their real name; it may survive in Piwigo FileIndex.json (until
+2026-11 FileDict.json) or in the
 uploaded_info state, both of which record output_filename.
 """
 import json

@@ -2255,7 +2255,7 @@ class PhotosUploader:
         r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$', re.IGNORECASE)
 
     def _load_file_dict(self) -> dict[str, list[dict[str, Any]]]:
-        """Load FileDict.json and return it, or an empty dict if unavailable."""
+        """Load Piwigo FileIndex.json and return it, or an empty dict if unavailable."""
         p = AlbumHierarchy._file_index_file()
         if not p.exists():
             return {}

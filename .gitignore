@@ -24,5 +24,8 @@ dist/
 
 # Runtime / per-user state
 PhotosUploader State.json
+Piwigo AlbumHierarchy.json
+Piwigo FileIndex.json
+# Their names until 2026-11
 AlbumHierarchy.json
 FileDict.json
