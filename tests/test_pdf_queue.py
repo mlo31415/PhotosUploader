@@ -212,6 +212,83 @@ class AllDone(_Pdf, unittest.TestCase):
         self.assertEqual(self.done_on_disk(), [])
 
 
+class KeepBoxes(_Pdf, unittest.TestCase):
+    """The Keep boxes for source and date mean nothing to a photo from a PDF,
+    so they are greyed out while one is shown -- and back for other photos."""
+
+    def greyed(self):
+        return {k: self.app._persist_checks[k].instate(["disabled"])
+                for k in ("photo_source", "date_of_photo", "tags", "comments")}
+
+    def test_greyed_for_a_photo_from_a_pdf(self):
+        self.open_pdf()
+        self.show(0)
+        self.assertEqual(self.greyed(), {"photo_source": True, "date_of_photo": True,
+                                         "tags": False, "comments": False})
+
+    def test_back_for_an_ordinary_photo(self):
+        self.open_pdf()
+        path = str(self.photos / "ordinary.jpg")
+        base.Image.new("RGB", (60, 40), "#3080c0").save(path)
+        self.app._add_single_image(path, {})
+        self.show(0)
+        self.show(len(self.app.input_paths) - 1)
+        self.assertFalse(any(self.greyed().values()), self.greyed())
+
+    def test_ticked_stays_ticked(self):
+        self.app.persist_vars['date_of_photo'].set(True)
+        self.open_pdf()
+        self.show(0)
+        self.assertTrue(self.app.persist_vars['date_of_photo'].get())
+
+    def test_back_when_the_queue_is_cleared(self):
+        self.open_pdf()
+        self.show(0)
+        self.app._clear_queue("")
+        self.assertFalse(any(self.greyed().values()), self.greyed())
+
+
+class NoConventionList(_Pdf, unittest.TestCase):
+    """Without the convention list, opening a PDF says so first."""
+
+    def setUp(self):
+        super().setUp()
+        self.app._con_list_cache = []
+        pu._store.set_op_param("con_timeline_file", str(self.work / "not there.txt"))
+        self.warned = []
+        self.go_on = True
+        pu.messagebox.askokcancel = lambda title, msg, **k: (self.warned.append((title, msg)),
+                                                             self.go_on)[1]
+
+    def test_it_warns_and_says_where_it_looked(self):
+        self.open_pdf()
+        self.assertEqual(len(self.warned), 1)
+        self.assertEqual(self.warned[0][0], "Convention List Not Found")
+        self.assertIn("not there.txt", self.warned[0][1])
+
+    def test_cancel_opens_nothing(self):
+        self.go_on = False
+        self.assertEqual(self.open_pdf(), 0)
+        self.assertEqual(self.app.input_paths, [])
+
+    def test_ok_opens_it_without_cons(self):
+        self.assertEqual(self.open_pdf(), 7)
+        self.show(0)
+        self.assertEqual((self.fields()["tags"], self.fields()["date"]), ("", "April 1987"))
+
+    def test_found_the_next_time_once_it_is_there(self):
+        self.open_pdf()
+        self.app._clear_queue("")
+        _slides.make_timeline(self.work / "not there.txt")
+        self.open_pdf()
+        self.assertEqual(len(self.warned), 1)
+
+    def test_no_warning_when_it_is_found(self):
+        _slides.make_timeline(self.work / "not there.txt")
+        self.open_pdf()
+        self.assertEqual(self.warned, [])
+
+
 class NothingKept(_Pdf, unittest.TestCase):
 
     def test_the_photos_go_when_the_app_closes(self):

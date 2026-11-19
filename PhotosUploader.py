@@ -332,7 +332,7 @@ class PhotosUploader:
         # "photo": PdfPhotos.PdfPhoto}.  The files are in _pdf_temp_root, which goes on close.
         self._pdf_items: dict[str, dict] = {}
         self._pdf_temp_root: str | None  = None
-        self._con_list_cache: list       = []       # [ConList or None], once loaded
+        self._con_list_cache: list       = []       # [ConList], once loaded
 
         # ── photo restoration state ──────────────────────────────────────────
         self._restoration_base:    "Image.Image | None" = None
@@ -369,6 +369,9 @@ class PhotosUploader:
         self._tt_filename = _FieldTooltip(self.output_filename_entry)
         self._tt_date     = _FieldTooltip(self.date_entry)
         self._tt_caption  = _FieldTooltip(self.custom_vars['comments'])
+        # ...and to the Keep boxes a photo from a PDF takes no notice of
+        self._tt_pdf_keep = {key: _FieldTooltip(self._persist_checks[key])
+                             for key in self._PDF_IGNORES_KEEP}
         # Trigger the album label to render with the restored album name.
         # The trace is only wired up inside _build_ui, so a write before that
         # call would be silently ignored — fire it explicitly now.
@@ -711,6 +714,7 @@ class PhotosUploader:
 
         self.custom_vars = {}
         self.persist_vars = {}  # Track which fields should persist across photos
+        self._persist_checks: dict[str, ttk.Checkbutton] = {}   # the boxes themselves
         for i, (key, label) in enumerate(CUSTOM_FIELDS):
             row = i + 1  # Offset by 1 to account for header row
             ttk.Label(custom_frame, text=label + ":", width=22, anchor="e").grid(
@@ -719,9 +723,10 @@ class PhotosUploader:
             # Checkbox for persist (output_filename has no persist option)
             if key != 'output_filename':
                 persist_var = tk.BooleanVar(value=False)
-                ttk.Checkbutton(custom_frame, variable=persist_var).grid(
-                    row=row, column=1, sticky="w", padx=4, pady=2)
+                persist_check = ttk.Checkbutton(custom_frame, variable=persist_var)
+                persist_check.grid(row=row, column=1, sticky="w", padx=4, pady=2)
                 self.persist_vars[key] = persist_var
+                self._persist_checks[key] = persist_check
 
             if key == 'comments':
                 txt = tk.Text(custom_frame, height=3, width=40, wrap="word",
@@ -909,11 +914,24 @@ class PhotosUploader:
                 f"Cannot read {name}: PyMuPDF is not installed.\n\n"
                 "pip install pymupdf==1.28.2", parent=self.root)
             return 0
+        cons = self._con_list()
+        if cons is None and not messagebox.askokcancel(
+                "Convention List Not Found",
+                "The list of conventions was not found at:\n\n"
+                f"  {self._con_list_path()}\n\n"
+                "Without it, photos from the PDF will not be matched to cons: "
+                "no con in the caption or tags, and no con dates.\n\n"
+                "(FancyAnalyzer writes the list.  To use one somewhere else, set "
+                "con_timeline_file in PhotosUploader Params.json.)\n\n"
+                f"Open {name} anyway?",
+                icon="warning", parent=self.root):
+            self.set_status(f"{name} not opened.")
+            return 0
         self.set_status(f"Reading {name}…")
         self.root.config(cursor="watch")
         self.root.update_idletasks()
         try:
-            photos = PdfPhotos.read_pdf(pdf_path, self._con_list())
+            photos = PdfPhotos.read_pdf(pdf_path, cons)
         except Exception as e:
             logger.exception(f"Could not read {pdf_path}")
             messagebox.showerror("Cannot Read PDF", f"Could not read {name}:\n\n{e}",
@@ -971,20 +989,26 @@ class PhotosUploader:
     def _con_list(self):
         """The cons and their dates, from FancyAnalyzer's convention timeline;
         None if it cannot be found, in which case no con is looked for.  The
-        "con_timeline_file" parameter overrides where it is looked for."""
+        "con_timeline_file" parameter overrides where it is looked for.  Not
+        finding it is not remembered: the next PDF looks again, so that
+        setting the parameter takes effect without a restart."""
         if not self._con_list_cache:
-            try:
-                where = _store.load_op_params().get("con_timeline_file") or ""
-            except Exception:
-                where = ""
-            path = Path(where) if where else (_SCRIPT_DIR.parent / "FancyAnalyzer" / "Reports"
-                                              / "Convention timeline (Fancy).txt")
+            path = self._con_list_path()
             try:
                 self._con_list_cache.append(PdfPhotos.ConList.load(path))
             except Exception as e:
                 logger.warning(f"No convention list, so no cons for PDF photos: {path}: {e}")
-                self._con_list_cache.append(None)
+                return None
         return self._con_list_cache[0]
+
+    @staticmethod
+    def _con_list_path() -> Path:
+        try:
+            where = _store.load_op_params().get("con_timeline_file") or ""
+        except Exception:
+            where = ""
+        return Path(where) if where else (_SCRIPT_DIR.parent / "FancyAnalyzer" / "Reports"
+                                          / "Convention timeline (Fancy).txt")
 
     def _mark_pdf_done(self, path: str | None):
         """A photo from a PDF has been uploaded or skipped: opening the PDF
@@ -1002,6 +1026,25 @@ class PhotosUploader:
             save_state(self.state_data)
         except Exception as e:
             logger.warning(f"Could not save state: {e}")
+
+    # The Keep boxes a photo from a PDF ignores: its slide decides these two
+    _PDF_IGNORES_KEEP = ('photo_source', 'date_of_photo')
+
+    def _show_keep_boxes_for(self, path: str | None):
+        """Grey out the Keep boxes the photo shown takes no notice of, and say
+        why; ordinary photos have them back.  Whether each is ticked is not
+        touched."""
+        if not getattr(self, '_tt_pdf_keep', None):
+            return                      # still being built
+        from_pdf = bool(path) and path in self._pdf_items
+        for key in self._PDF_IGNORES_KEEP:
+            self._persist_checks[key].state(["disabled"] if from_pdf else ["!disabled"])
+            tip = self._tt_pdf_keep[key]
+            if from_pdf:
+                tip.enable("Not used for photos from a PDF: the slide gives the "
+                           + ("source." if key == 'photo_source' else "date."))
+            else:
+                tip.disable()
 
     def _apply_pdf_fields(self, path: str):
         """A photo from a PDF, shown for the first time: fill its fields from
@@ -1572,6 +1615,7 @@ class PhotosUploader:
             self._refresh_exif_tree()
             self._load_custom_fields(path)
             self._apply_pdf_fields(path)
+            self._show_keep_boxes_for(path)
             self.path_var.set(path)
             self._validate_caption_field()
             self.rotate_right_btn.config(state="normal")
@@ -2356,6 +2400,7 @@ class PhotosUploader:
         self._validate_date_field()
         self._validate_output_filename_field()
         self._set_restoration_base()
+        self._show_keep_boxes_for(None)
 
     # -----------------------------------------------------------------------
     # Utilities
