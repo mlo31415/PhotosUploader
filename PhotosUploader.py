@@ -1,7 +1,8 @@
 """
 PhotosUploader.py
 A GUI application for photo processing workflows.
-Requires: pip install Pillow tkinterdnd2 piexif
+Requires: pip install Pillow tkinterdnd2 piexif pymupdf==1.28.2
+(PyMuPDF only for photos from PDF slide shows; 2.x pulls in onnxruntime)
 """
 
 import sys
@@ -42,6 +43,14 @@ try:
 except ImportError:
     DND_AVAILABLE = False
     print("WARNING: tkinterdnd2 not installed. Run: pip install tkinterdnd2")
+
+try:
+    import PdfPhotos
+    PDF_AVAILABLE = True
+except ImportError:
+    PdfPhotos = None  # type: ignore[assignment]
+    PDF_AVAILABLE = False
+    print("WARNING: PyMuPDF not installed, so no photos from PDFs. Run: pip install pymupdf==1.28.2")
 
 # ---------------------------------------------------------------------------
 # Locate and import the shared AlbumHierarchy module
@@ -185,6 +194,10 @@ def is_image(path: str) -> bool:
     return Path(path).suffix.lower() in IMAGE_EXTENSIONS
 
 
+def is_pdf(path: str) -> bool:
+    return Path(path).suffix.lower() == ".pdf"
+
+
 def parse_dnd_paths(data: str) -> list[str]:
     """Parse drag-and-drop path string into a list of file paths."""
     paths = []
@@ -315,6 +328,11 @@ class PhotosUploader:
         self._loading_fields: bool  = False         # True while _load_photo is populating fields
         self._nav_guard:     bool   = False         # True while _nav_prev/next already checked ok
         self._resetting_sliders: bool = False       # True while _set_restoration_base resets sliders
+        # Photos from PDF slide shows: queue path → {"pdf": file name, "key": "p037-2",
+        # "photo": PdfPhotos.PdfPhoto}.  The files are in _pdf_temp_root, which goes on close.
+        self._pdf_items: dict[str, dict] = {}
+        self._pdf_temp_root: str | None  = None
+        self._con_list_cache: list       = []       # [ConList or None], once loaded
 
         # ── photo restoration state ──────────────────────────────────────────
         self._restoration_base:    "Image.Image | None" = None
@@ -837,18 +855,24 @@ class PhotosUploader:
             p = p.strip()
             if os.path.isdir(p):
                 added += self._add_folder(p, batch_state)
+            elif is_pdf(p):
+                added += self._add_pdf(p, batch_state)
             elif is_image(p):
                 if self._add_single_image(p, batch_state):
                     added += 1
         self._update_counts()
-        self.set_status(f"Dropped {added} image(s) into input queue.")
+        if not any(is_pdf(p) for p in paths):           # _add_pdf has said what it did
+            self.set_status(f"Dropped {added} image(s) into input queue.")
 
     # -----------------------------------------------------------------------
     # Add photos / folders
     # -----------------------------------------------------------------------
     def add_photos_dialog(self):
         filetypes = [
+            ("Images and PDF slide shows",
+             " ".join(f"*{e}" for e in IMAGE_EXTENSIONS) + " *.pdf"),
             ("Image files", " ".join(f"*{e}" for e in IMAGE_EXTENSIONS)),
+            ("PDF slide shows", "*.pdf"),
             ("All files", "*.*"),
         ]
         initialdir = self.state_data.get("input_path") or None
@@ -859,10 +883,152 @@ class PhotosUploader:
         batch_state = {}
         added = 0
         for p in paths:
-            if self._add_single_image(p, batch_state):
+            if is_pdf(p):
+                added += self._add_pdf(p, batch_state)
+            elif self._add_single_image(p, batch_state):
                 added += 1
         self._update_counts()
-        self.set_status(f"Added {added} image(s) to input queue.")
+        if not any(is_pdf(p) for p in paths):           # _add_pdf has said what it did
+            self.set_status(f"Added {added} image(s) to input queue.")
+
+    # -----------------------------------------------------------------------
+    # Photos from a PDF slide show
+    # -----------------------------------------------------------------------
+    # In the state file: PDF file name → keys ("p006", "p037-2") of the photos
+    # in it already uploaded or skipped, which opening it again leaves out.
+    # By name, so that moving the PDF, or a corrected copy of it, carries on.
+    _PDF_PROGRESS_KEY = "pdf_progress"
+
+    def _add_pdf(self, pdf_path: str, batch_state: dict[str, str]) -> int:
+        """Queue the photos of a slide-show PDF, less those already uploaded or
+        skipped.  Returns how many were added."""
+        name = os.path.basename(pdf_path)
+        if not PDF_AVAILABLE:
+            messagebox.showerror(
+                "PDFs Not Available",
+                f"Cannot read {name}: PyMuPDF is not installed.\n\n"
+                "pip install pymupdf==1.28.2", parent=self.root)
+            return 0
+        self.set_status(f"Reading {name}…")
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            photos = PdfPhotos.read_pdf(pdf_path, self._con_list())
+        except Exception as e:
+            logger.exception(f"Could not read {pdf_path}")
+            messagebox.showerror("Cannot Read PDF", f"Could not read {name}:\n\n{e}",
+                                 parent=self.root)
+            self.set_status(f"Could not read {name}.")
+            return 0
+        finally:
+            self.root.config(cursor="")
+        if not photos:
+            messagebox.showinfo("No Photos", f"No photos were found in {name}.",
+                                parent=self.root)
+            self.set_status(f"No photos in {name}.")
+            return 0
+
+        done = set(self.state_data.get(self._PDF_PROGRESS_KEY, {}).get(name, []))
+        todo = [p for p in photos if p.key not in done]
+        if not todo:
+            if not messagebox.askyesno(
+                    "All Photos Done",
+                    f"All {len(photos)} photos in “{name}” have been uploaded or skipped.\n\n"
+                    "Start over from the first?", parent=self.root):
+                self.set_status(f"All {len(photos)} photos in {name} are done.")
+                return 0
+            self.state_data.get(self._PDF_PROGRESS_KEY, {}).pop(name, None)
+            self._save_state_quietly()
+            todo = photos
+
+        if self._pdf_temp_root is None:
+            self._pdf_temp_root = tempfile.mkdtemp(prefix="PhotosUploader PDF ")
+        folder = os.path.join(self._pdf_temp_root, Path(name).stem)
+        os.makedirs(folder, exist_ok=True)
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+        try:
+            paths = PdfPhotos.save_photos(pdf_path, todo, folder)
+        except Exception as e:
+            logger.exception(f"Could not extract photos from {pdf_path}")
+            messagebox.showerror("Cannot Read PDF",
+                                 f"Could not take the photos out of {name}:\n\n{e}",
+                                 parent=self.root)
+            return 0
+        finally:
+            self.root.config(cursor="")
+
+        added = 0
+        for photo, path in zip(todo, paths):
+            self._pdf_items[path] = {"pdf": name, "key": photo.key, "photo": photo}
+            if self._add_single_image(path, batch_state):
+                added += 1
+        left_out = len(photos) - len(todo)
+        self.set_status(f"Added {added} photo(s) from {name}"
+                        + (f"; {left_out} already uploaded or skipped." if left_out else "."))
+        return added
+
+    def _con_list(self):
+        """The cons and their dates, from FancyAnalyzer's convention timeline;
+        None if it cannot be found, in which case no con is looked for.  The
+        "con_timeline_file" parameter overrides where it is looked for."""
+        if not self._con_list_cache:
+            try:
+                where = _store.load_op_params().get("con_timeline_file") or ""
+            except Exception:
+                where = ""
+            path = Path(where) if where else (_SCRIPT_DIR.parent / "FancyAnalyzer" / "Reports"
+                                              / "Convention timeline (Fancy).txt")
+            try:
+                self._con_list_cache.append(PdfPhotos.ConList.load(path))
+            except Exception as e:
+                logger.warning(f"No convention list, so no cons for PDF photos: {path}: {e}")
+                self._con_list_cache.append(None)
+        return self._con_list_cache[0]
+
+    def _mark_pdf_done(self, path: str | None):
+        """A photo from a PDF has been uploaded or skipped: opening the PDF
+        again will leave it out."""
+        item = self._pdf_items.get(path or "")
+        if not item:
+            return
+        done = self.state_data.setdefault(self._PDF_PROGRESS_KEY, {}).setdefault(item["pdf"], [])
+        if item["key"] not in done:
+            done.append(item["key"])
+            self._save_state_quietly()
+
+    def _save_state_quietly(self):
+        try:
+            save_state(self.state_data)
+        except Exception as e:
+            logger.warning(f"Could not save state: {e}")
+
+    def _apply_pdf_fields(self, path: str):
+        """A photo from a PDF, shown for the first time: fill its fields from
+        the slide.  Once the user has been on it, what they left is kept
+        (in custom_data) and this does nothing."""
+        item = self._pdf_items.get(path)
+        if not item or path in self.custom_data:
+            return
+        p = item["photo"]
+        # The slide's source and date, or none -- even with Keep on: a kept
+        # value is whatever the field holds, so after one slide it would be
+        # that slide's, carried on to the next slide that gives none.  And
+        # never the file's own date, which is today's
+        self.custom_vars['photo_source'].set(p.source)
+        self.custom_vars['date_of_photo'].set(p.date)
+        caption = self.custom_vars['comments']
+        caption.delete('1.0', "end")
+        caption.insert('1.0', p.caption)
+        tags = [t.strip() for t in self.custom_vars['tags'].get().split(',') if t.strip()] \
+            if self.persist_vars['tags'].get() else []
+        if p.tags and p.tags not in tags:
+            tags.append(p.tags)
+        self.custom_vars['tags'].set(', '.join(tags))
+        self._validate_caption_field()
+        self._validate_date_field()
+        if p.notes:
+            self.set_status(f"Slide {p.page}: " + "  ".join(p.notes))
 
 
     def _add_folder(self, folder: str, batch_state: dict[str, str] | None = None) -> int:
@@ -1155,6 +1321,7 @@ class PhotosUploader:
             idx = self.input_paths.index(self.current_photo)
         except ValueError:
             return
+        self._mark_pdf_done(self.current_photo)
 
         next_idx = idx + 1
         if next_idx >= len(self.input_paths):
@@ -1374,6 +1541,8 @@ class PhotosUploader:
             return path
         if self._auto_rename_confirmed or path in self.uploaded_info:
             return path
+        if path in self._pdf_items:
+            return path                 # named for its PDF and slide, not auto-renamed
         if not messagebox.askyesno(
                 "Auto Rename Active",
                 "Auto Renaming is in effect. File names will be changed at upload time.\n\n"
@@ -1402,6 +1571,7 @@ class PhotosUploader:
             self._apply_file_date_fallback(path)
             self._refresh_exif_tree()
             self._load_custom_fields(path)
+            self._apply_pdf_fields(path)
             self.path_var.set(path)
             self._validate_caption_field()
             self.rotate_right_btn.config(state="normal")
@@ -2228,6 +2398,8 @@ class PhotosUploader:
             return
         if not self.auto_rename_var.get().strip():
             return
+        if path in self._pdf_items:
+            return                      # named for its PDF and slide, not auto-renamed
         try:
             prefix = self._auto_rename_prefix()
             counter = self._auto_rename_next_counter(prefix)
@@ -2657,7 +2829,8 @@ class PhotosUploader:
         # If the upload then fails, undo_rename puts everything back, so that
         # trying again renames the original file, not the renamed one.
         undo_rename = None
-        if self.auto_rename_var.get().strip() and path not in self.uploaded_info:
+        if (self.auto_rename_var.get().strip() and path not in self.uploaded_info
+                and path not in self._pdf_items):     # named for its PDF and slide
             orig_basename = os.path.basename(path)
             orig_stem, orig_ext = os.path.splitext(orig_basename)
             try:
@@ -2760,6 +2933,7 @@ class PhotosUploader:
 
         def finish_ok(image_id):
             close_progress()
+            self._mark_pdf_done(path)
             if path not in self.input_paths:
                 # Removed from queue while upload was in progress — just record it
                 self._record_upload(path, album, album_id=album_id, file_id=image_id)
@@ -2866,6 +3040,9 @@ class PhotosUploader:
         self.state_data["geometry"] = f"{w}x{h}+{x}+{y}"
         self._persist_state()
         self.root.destroy()
+        # Photos taken out of PDFs are not kept: the PDF still has them
+        if self._pdf_temp_root:
+            shutil.rmtree(self._pdf_temp_root, ignore_errors=True)
 
     _IRFANVIEW_PATHS = [
         r"C:\Program Files\IrfanView\i_view64.exe",
