@@ -8,6 +8,7 @@ Requires: pip install Pillow tkinterdnd2 piexif pymupdf==1.28.2
 import sys
 import os
 import re
+import copy
 import json
 import shutil
 import tempfile
@@ -133,7 +134,14 @@ def load_state() -> dict[str, Any]:
     return {}
 
 
+# Test Mode (see PhotosUploader._set_test_mode): while it is on, the state file
+# is not written.  Here, so that no caller can get round it.
+_test_mode = False
+
+
 def save_state(state: dict[str, Any]) -> None:
+    if _test_mode:
+        return
     dest = _state_file()
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=dest.parent, suffix=".tmp", delete=False
@@ -188,6 +196,27 @@ def _is_sensible_date(date_str: str) -> bool:
         return 1926 < int(date_str[:4]) <= _dt.date.today().year
     except (ValueError, IndexError, TypeError):
         return False
+
+
+class TestModeRefusal(RuntimeError):
+    """A request Test Mode did not let through to Piwigo."""
+
+
+def _read_only_client(client_cls):
+    """client_cls, refusing every request that would change the Piwigo site.
+    Reading -- logging in, listing albums and tags, fetching photos -- still
+    works.  Every Piwigo method that only reads is pwg.session.* or *.get*."""
+    class ReadOnlyPiwigoClient(client_cls):
+        def _call(self, method: str, params: dict = None) -> dict:
+            if not (method.startswith("pwg.session.")
+                    or method.rsplit(".", 1)[-1].startswith("get")):
+                raise TestModeRefusal(f"Test Mode is on: {method} was not sent to Piwigo.")
+            return super()._call(method, params)
+
+        def upload_image(self, *a, **k):
+            # Posts the file itself, not through _call
+            raise TestModeRefusal("Test Mode is on: the upload was not sent to Piwigo.")
+    return ReadOnlyPiwigoClient
 
 
 def is_image(path: str) -> bool:
@@ -333,6 +362,12 @@ class PhotosUploader:
         self._pdf_items: dict[str, dict] = {}
         self._pdf_temp_root: str | None  = None
         self._con_list_cache: list       = []       # [ConList], once loaded
+        # Test Mode: see _set_test_mode
+        self._test_mode: bool            = False
+        self._test_dir: str | None       = None     # its temp folder
+        self._test_uploads: dict         = {}       # path it "uploaded" → (record before, was dirty)
+        self._pre_test_state: dict       = {}       # state_data as it was before
+        self._real_piwigo: tuple         = ()       # what it put aside, to put back
 
         # ── photo restoration state ──────────────────────────────────────────
         self._restoration_base:    "Image.Image | None" = None
@@ -398,6 +433,13 @@ class PhotosUploader:
         ttk.Button(toolbar, text="Download Album Hierarchy", command=self._download_album_hierarchy).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Download File List", command=self._download_file_list).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Exit", command=self._on_close).pack(side="right", padx=2)
+        # A tk.Button, not ttk: ttk buttons on Windows will not take a colour
+        self.test_mode_btn = tk.Button(toolbar, text="Test Mode", command=self._toggle_test_mode,
+                                       relief="raised", padx=8)
+        self.test_mode_btn.pack(side="right", padx=(2, 10))
+        self._test_btn_colours = (self.test_mode_btn.cget("bg"),
+                                  self.test_mode_btn.cget("activebackground"),
+                                  self.test_mode_btn.cget("fg"))
 
         # ── Main three-panel area ─────────────────────────────────────────
         main_pane = ttk.PanedWindow(self.root, orient="horizontal")
@@ -1027,6 +1069,91 @@ class PhotosUploader:
         except Exception as e:
             logger.warning(f"Could not save state: {e}")
 
+    # -----------------------------------------------------------------------
+    # Test Mode
+    # -----------------------------------------------------------------------
+    _TEST_ORANGE = "#ff8c00"
+
+    def _toggle_test_mode(self):
+        self._set_test_mode(not self._test_mode)
+
+    def _set_test_mode(self, on: bool):
+        """Test Mode: nothing is changed on the Piwigo site or in any lasting
+        file here, and the program can otherwise be used as usual.
+
+          Piwigo     every client the program or the shared helpers make
+                     refuses whatever would change the site -- uploads, and
+                     adding, renaming, moving or deleting albums -- and reads
+                     as usual.  Upload goes through all its steps but the
+                     sending, and the photo counts as uploaded until Test
+                     Mode ends.
+          This computer  the state file is not written; the shared album and
+                     file caches are copies in a temp folder; auto-rename names
+                     the upload but leaves the file alone; Revert's copy goes
+                     in the temp folder; an uploaded photo is not overwritten
+                     with Piwigo's.
+
+        Ending it puts back what it set aside and undoes what was done in it:
+        the "uploads", the PDF progress, the auto-rename numbers.  It is never
+        on when the program starts."""
+        global _test_mode
+        if on == self._test_mode:
+            return
+        if on:
+            self._pre_test_state = copy.deepcopy(self.state_data)
+            self._test_dir = tempfile.mkdtemp(prefix="PhotosUploader Test Mode ")
+            self._real_piwigo = (AlbumHierarchy.PiwigoClient,
+                                 AlbumHierarchy._album_hierarchy_file,
+                                 AlbumHierarchy._file_index_file)
+            # The caches as they are now, under whichever name they have: looking
+            # one up the usual way would rename an old-named one, which is a change
+            data_dir = AlbumHierarchy._data_dir()
+            copies = []
+            for name in (AlbumHierarchy._ALBUM_HIERARCHY_NAME, AlbumHierarchy._FILE_INDEX_NAME):
+                for existing in (data_dir / name, data_dir / AlbumHierarchy._OLD_NAMES[name]):
+                    if existing.exists():
+                        shutil.copy2(existing, Path(self._test_dir) / name)
+                        break
+                copies.append(Path(self._test_dir) / name)
+            AlbumHierarchy._album_hierarchy_file = lambda: copies[0]
+            AlbumHierarchy._file_index_file = lambda: copies[1]
+            AlbumHierarchy.PiwigoClient = _read_only_client(self._real_piwigo[0])
+            _test_mode = True
+            self.test_mode_btn.config(bg=self._TEST_ORANGE, activebackground=self._TEST_ORANGE,
+                                      fg="black", relief="sunken")
+            self.set_status("TEST MODE: nothing will be changed on Piwigo or saved on "
+                            "this computer.")
+        else:
+            (AlbumHierarchy.PiwigoClient, AlbumHierarchy._album_hierarchy_file,
+             AlbumHierarchy._file_index_file) = self._real_piwigo
+            _test_mode = False
+            self.state_data = self._pre_test_state
+            # A photo "uploaded" in Test Mode is as it was before: not uploaded,
+            # or, if it really had been, uploaded as it really was
+            for path, (before, was_dirty) in self._test_uploads.items():
+                if path not in self.input_paths:
+                    continue                    # gone from the queue since
+                if before is None:
+                    self.uploaded_info.pop(path, None)
+                else:
+                    self.uploaded_info[path] = before
+                if was_dirty:
+                    self._dirty_paths.add(path)
+                idx = self.input_paths.index(path)
+                selected = idx in self.input_list.curselection()
+                self.input_list.delete(idx)
+                self.input_list.insert(idx, self._listbox_label(path))
+                if selected:
+                    self.input_list.selection_set(idx)
+            self._test_uploads.clear()
+            shutil.rmtree(self._test_dir, ignore_errors=True)
+            self._test_dir = None
+            bg, active, fg = self._test_btn_colours
+            self.test_mode_btn.config(bg=bg, activebackground=active, fg=fg, relief="raised")
+            self.set_status("Test Mode off: what was done in it has been undone.")
+        self._test_mode = on
+        self._update_counts()
+
     # The Keep boxes a photo from a PDF ignores: its slide decides these two
     _PDF_IGNORES_KEEP = ('photo_source', 'date_of_photo')
 
@@ -1301,8 +1428,9 @@ class PhotosUploader:
         """Download a previously-uploaded photo from Piwigo and display it."""
         info = self.uploaded_info.get(path, {})
         image_id = info.get('image_id', 0)
-        if not image_id:
-            self._load_photo(path)  # fallback: local file still there
+        if not image_id or self._test_mode:
+            # The local file: in Test Mode it must not be overwritten with Piwigo's
+            self._load_photo(path)
             return
 
         dlg = tk.Toplevel(self.root)
@@ -1511,6 +1639,8 @@ class PhotosUploader:
             source = self.current_photo
 
         src_dir = os.path.dirname(source) or '.'
+        if self._test_mode:
+            src_dir = self._test_dir    # not a lasting file beside the original
         name, ext = os.path.splitext(base_name)
         # Generate a unique filename in the same directory
         i = 1
@@ -2874,8 +3004,18 @@ class PhotosUploader:
         # If the upload then fails, undo_rename puts everything back, so that
         # trying again renames the original file, not the renamed one.
         undo_rename = None
-        if (self.auto_rename_var.get().strip() and path not in self.uploaded_info
-                and path not in self._pdf_items):     # named for its PDF and slide
+        auto_rename = (self.auto_rename_var.get().strip() and path not in self.uploaded_info
+                       and path not in self._pdf_items)     # named for its PDF and slide
+        test_mode = self._test_mode
+        if auto_rename and test_mode:
+            # The name it would go under, but the file keeps its own; and the
+            # number is used up only until Test Mode ends
+            prefix = self._auto_rename_prefix()
+            counter = self._auto_rename_next_counter(prefix)
+            output_filename = f"{prefix}{counter:05d}" + os.path.splitext(path)[1].lower()
+            self.state_data.setdefault("auto_rename_counts", {})[prefix] = counter
+            self.custom_vars['output_filename'].set(output_filename)
+        elif auto_rename:
             orig_basename = os.path.basename(path)
             orig_stem, orig_ext = os.path.splitext(orig_basename)
             try:
@@ -2937,6 +3077,11 @@ class PhotosUploader:
                                                       source_image=edited_image,
                                                       upload_name=output_filename)
                 upload_path = temp_path if temp_path else path
+                if test_mode:
+                    # Everything up to the sending
+                    set_stage("Test Mode: nothing sent to Piwigo.")
+                    self.root.after(0, lambda: finish_ok(0))
+                    return
 
                 client = AlbumHierarchy.PiwigoClient(
                     creds['url'], creds['username'], creds['password'],
@@ -2978,12 +3123,16 @@ class PhotosUploader:
 
         def finish_ok(image_id):
             close_progress()
+            if test_mode and path not in self._test_uploads:
+                self._test_uploads[path] = (self.uploaded_info.get(path), path in self._dirty_paths)
+            done = (f"Test Mode: {output_filename} would have gone to '{album}'. Nothing was sent."
+                    if test_mode else
+                    f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
             self._mark_pdf_done(path)
             if path not in self.input_paths:
                 # Removed from queue while upload was in progress — just record it
                 self._record_upload(path, album, album_id=album_id, file_id=image_id)
-                self.set_status(
-                    f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
+                self.set_status(done)
                 return
             idx = self.input_paths.index(path)
             # Mark as uploaded (keep in queue, mark clean)
@@ -3000,7 +3149,10 @@ class PhotosUploader:
 
             # All photos uploaded — clear queue and announce
             if not (self._dirty_paths & set(self.input_paths)):
-                self._clear_queue(f"All {len(self.input_paths)} photo(s) uploaded — queue cleared.")
+                self._clear_queue(f"All {len(self.input_paths)} photo(s) uploaded — queue cleared."
+                                  if not test_mode else
+                                  f"Test Mode: all {len(self.input_paths)} photo(s) would have "
+                                  "been uploaded — queue cleared.")
                 return
 
             # Save the just-uploaded photo's custom fields before leaving it,
@@ -3016,8 +3168,7 @@ class PhotosUploader:
                 self._load_photo(self.current_photo)
                 self._copy_filename_to_caption(self.current_photo)
                 self._apply_auto_rename_preview(self.current_photo)
-            self.set_status(
-                f"Uploaded {output_filename} → '{album}' (image id {image_id}).")
+            self.set_status(done)
 
         def finish_err(err):
             close_progress()
@@ -3083,7 +3234,10 @@ class PhotosUploader:
         x, y = self.root.winfo_x(), self.root.winfo_y()
         w, h = self.root.winfo_width(), self.root.winfo_height()
         self.state_data["geometry"] = f"{w}x{h}+{x}+{y}"
-        self._persist_state()
+        self._persist_state()               # (not written in Test Mode)
+        # Nothing from Test Mode is kept either; the next start begins outside it
+        if self._test_mode:
+            self._set_test_mode(False)
         self.root.destroy()
         # Photos taken out of PDFs are not kept: the PDF still has them
         if self._pdf_temp_root:
