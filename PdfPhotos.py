@@ -335,6 +335,87 @@ def expand_names(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Who is in the photo: "L-R: ??" goes on a caption that names no one, when
+# the photo has faces in it
+# ---------------------------------------------------------------------------
+LR_PROMPT = "L-R: ??"
+
+# Capitalised words that are some fan's first name but are much more often
+# something else
+_NOT_NAMES = set(
+    "The A An And Mr Mrs Ms Dr Con Eve Time American Big Saint St Sir Lady "
+    "May June April August Will Christmas Hope Joy "
+    "Sunday Monday Tuesday Wednesday Thursday Friday Saturday".split())
+_NAME_WORD = r"[^\W\d_][\w\-]+"       # two letters at least: not the L of "L.A.con"
+
+
+class PeopleNames:
+    """Whether a caption names anyone, from the first names in FancyAnalyzer's
+    "Peoples names.txt" -- one name a line, perhaps with a "(qualifier)".
+
+    A known first name followed by another capitalised word ("Sandi Cupp",
+    "Fred (pre-Levy) Haskell") is a name; so is one standing alone ("Joe
+    joined the group dance") if two or more fans have it, which leaves out
+    the odd fan whose first name is an ordinary word."""
+
+    def __init__(self, firsts: dict[str, int]):
+        self.firsts = dict(firsts)
+        for first in _FULL_NAMES:
+            self.firsts[first] = max(self.firsts.get(first, 0), 2)
+
+    @classmethod
+    def load(cls, path: "str | Path") -> "PeopleNames":
+        firsts: dict[str, int] = {}
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            words = re.sub(r"\s*\([^)]*\)\s*$", "", line).split()
+            if len(words) >= 2:
+                firsts[words[0]] = firsts.get(words[0], 0) + 1
+        return cls(firsts)
+
+    def _first(self, word: str, at_least: int) -> bool:
+        return word not in _NOT_NAMES and self.firsts.get(word, 0) >= at_least
+
+    def names_someone(self, text: str) -> bool:
+        for m in re.finditer(rf"(?<![\w\-])({_NAME_WORD})(?=\s+(?:\([^)]*\)\s+)?(\w))", text):
+            if m.group(2).isupper() and self._first(m.group(1), 1):
+                return True
+        return any(self._first(w, 2) for w in re.findall(rf"(?<![\w\-]){_NAME_WORD}", text))
+
+
+def has_faces(image_path: "str | Path", model_path: "str | Path",
+              threshold: float = 0.6) -> bool | None:
+    """Whether there is a face in the photo, by OpenCV's YuNet detector (the
+    .onnx model SlideShow uses); None if it cannot tell -- no OpenCV, no
+    model, or an image it cannot read."""
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return None
+    if not Path(model_path).exists():
+        return None
+    try:
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+    except AttributeError:
+        pass
+    try:
+        with Image.open(image_path) as im:
+            im = im.convert("RGB")
+            # Reduced, for speed, as SlideShow does: big enough for small faces
+            scale = min(1.0, 1600 / max(im.size))
+            if scale < 1:
+                im = im.resize((round(im.width * scale), round(im.height * scale)))
+            arr = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+        detector = cv2.FaceDetectorYN.create(str(model_path), "", (arr.shape[1], arr.shape[0]),
+                                             threshold)
+        _, faces = detector.detect(arr)
+        return faces is not None and len(faces) > 0
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Photos
 # ---------------------------------------------------------------------------
 @dataclass
@@ -348,6 +429,7 @@ class PdfPhoto:
     con:      str = ""     # the Fancyclopedia name, or ""
     tags:     str = ""
     notes:    list[str] = field(default_factory=list)   # for the user's attention
+    named:    bool | None = None   # whether the caption names anyone; None if not known
 
 
 _MIN_PIXELS = 200          # an image narrower or shorter than this is not a photo
@@ -517,8 +599,10 @@ def _text(lines: list[str]) -> str:
     return re.sub(r"\s+", " ", " ".join(lines)).strip()
 
 
-def read_pdf(pdf_path: "str | Path", cons: ConList | None = None) -> list[PdfPhoto]:
-    """Every photo in the PDF, with its caption, date, source and con."""
+def read_pdf(pdf_path: "str | Path", cons: ConList | None = None,
+             people: PeopleNames | None = None) -> list[PdfPhoto]:
+    """Every photo in the PDF, with its caption, date, source and con, and
+    whether the caption names anyone (if people is given)."""
     photos = []
     with pymupdf.open(str(pdf_path)) as doc:
         for pno, page in enumerate(doc, 1):
@@ -551,6 +635,8 @@ def read_pdf(pdf_path: "str | Path", cons: ConList | None = None) -> list[PdfPho
                 near = rect if several or not mine else mine[0].rect
                 credit_lines = [ln for c in _nearest(near, credits) for ln in c.lines]
                 p = _describe(key, pno, xref, caption, credit_lines, headings, cons)
+                if people:
+                    p.named = people.names_someone(expand_names(caption))
                 if len(credits) > max(1, len(placed)):
                     p.notes.append("The slide has more than one credit line; "
                                    "check that this one is the photo's.")

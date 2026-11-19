@@ -110,6 +110,71 @@ class Names(unittest.TestCase):
         self.assertEqual(PdfPhotos.expand_names("Pat’s Mom"), "Pat Virzi’s Mom")
 
 
+class NamesSomeone(unittest.TestCase):
+    """Whether a caption names anyone: the test for "L-R: ??"."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.work = Path(tempfile.mkdtemp())
+        cls.people = PdfPhotos.PeopleNames.load(_slides.make_people(cls.work / "Peoples names.txt"))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.work, ignore_errors=True)
+
+    def named(self, text):
+        return self.people.names_someone(text)
+
+    def test_a_first_name_and_surname(self):
+        self.assertTrue(self.named("Sandi Cupp… and her shoes"))
+        self.assertTrue(self.named("Liz Smith-Jones at the bar"), "a surname the list does not have")
+
+    def test_a_middle_bit_in_brackets(self):
+        self.assertTrue(self.named("Bob (pre-Levy) Tucker"))
+
+    def test_a_first_name_alone_if_two_fans_have_it(self):
+        self.assertTrue(self.named("Before long, Joe joined the group dance"))
+        self.assertTrue(self.named("Road-tripping with Rob. Remember road maps?"),
+                        "a qualified name counts")
+        self.assertFalse(self.named("Sandi’s shoes"), "only one Sandi")
+
+    def test_the_hosts_alone(self):
+        self.assertTrue(self.named("Pat reacts"))
+        self.assertTrue(self.named("Geri’s office"))
+
+    def test_no_names(self):
+        for text in ("Minicon Opening Ceremonies", "Not-A-D-Con outing to the Como Zoo",
+                     "Toner group outing to the Chicago Hot Dogs stand",
+                     "Fan lounge set-up at L.A.con III", "… with friends", ""):
+            self.assertFalse(self.named(text), text)
+
+    def test_ordinary_words_that_are_also_first_names(self):
+        self.assertFalse(self.named("The Count of Monte Cristo"))
+        self.assertFalse(self.named("during what would have been the Sunday finale"))
+
+
+class Faces(unittest.TestCase):
+
+    MODEL = Path(__file__).resolve().parent.parent / "face_detection_yunet_2023mar.onnx"
+
+    def setUp(self):
+        self.work = Path(tempfile.mkdtemp())
+        self.photo = self.work / "plain.jpg"
+        _slides.Image.new("RGB", (900, 600), "#80a0c0").save(self.photo)
+
+    def tearDown(self):
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def test_none_in_a_plain_photo(self):
+        self.assertIs(PdfPhotos.has_faces(self.photo, self.MODEL), False)
+
+    def test_cannot_tell_without_the_model(self):
+        self.assertIsNone(PdfPhotos.has_faces(self.photo, self.work / "no model.onnx"))
+
+    def test_cannot_tell_without_a_photo(self):
+        self.assertIsNone(PdfPhotos.has_faces(self.work / "not there.jpg", self.MODEL))
+
+
 class Cons(unittest.TestCase):
 
     @classmethod
@@ -214,6 +279,16 @@ class ThePdf(unittest.TestCase):
     def test_without_a_con_list(self):
         p = {p.key: p for p in PdfPhotos.read_pdf(self.pdf)}["p007"]
         self.assertEqual((p.con, p.date), ("", "March 1997"))
+
+    def test_whether_each_caption_names_anyone(self):
+        """From the slide's caption, not the place or the con added to it."""
+        people = PdfPhotos.PeopleNames.load(_slides.make_people(self.work / "Peoples names.txt"))
+        named = {p.key: p.named for p in PdfPhotos.read_pdf(self.pdf, self.cons, people)}
+        self.assertEqual(named, {"p002": True, "p003-1": True, "p003-2": True, "p004": False,
+                                 "p006": True, "p007": True, "p008": False})
+
+    def test_not_known_without_the_list(self):
+        self.assertTrue(all(p.named is None for p in self.photos.values()))
 
     def test_saved_as_they_are_in_the_pdf(self):
         out = self.work / "out"

@@ -8,8 +8,9 @@ a = Analysis(
     # during analysis and bundled into the exe.
     pathex=[os.path.join(SPECPATH, '..', 'PiwigoHelpers')],
     binaries=[],
-    # Bundle the icon so root.iconbitmap() can find it at runtime (via sys._MEIPASS)
-    datas=[('PhotosUploader.ico', '.')],
+    # Bundle the icon so root.iconbitmap() can find it at runtime (via sys._MEIPASS),
+    # and SlideShow's face detector, for "L-R: ??" on PDF photos of people
+    datas=[('PhotosUploader.ico', '.'), ('face_detection_yunet_2023mar.onnx', '.')],
     hiddenimports=['DownloadAlbumStructure'],
     hookspath=[],
     hooksconfig={},

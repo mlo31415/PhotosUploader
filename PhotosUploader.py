@@ -1,8 +1,9 @@
 """
 PhotosUploader.py
 A GUI application for photo processing workflows.
-Requires: pip install Pillow tkinterdnd2 piexif pymupdf==1.28.2
-(PyMuPDF only for photos from PDF slide shows; 2.x pulls in onnxruntime)
+Requires: pip install Pillow tkinterdnd2 piexif pymupdf==1.28.2 opencv-python
+(PyMuPDF only for photos from PDF slide shows; 2.x pulls in onnxruntime.
+ OpenCV only to find faces in them, for "L-R: ??")
 """
 
 import sys
@@ -362,6 +363,7 @@ class PhotosUploader:
         self._pdf_items: dict[str, dict] = {}
         self._pdf_temp_root: str | None  = None
         self._con_list_cache: list       = []       # [ConList], once loaded
+        self._people_cache: list         = []       # [PeopleNames], once loaded
         # Test Mode: see _set_test_mode
         self._test_mode: bool            = False
         self._test_dir: str | None       = None     # its temp folder
@@ -969,11 +971,23 @@ class PhotosUploader:
                 icon="warning", parent=self.root):
             self.set_status(f"{name} not opened.")
             return 0
+        people = self._people_names()
+        if people is None and not messagebox.askokcancel(
+                "People's Names Not Found",
+                "The list of people's names was not found at:\n\n"
+                f"  {self._people_names_path()}\n\n"
+                f"Without it, no caption will get “{PdfPhotos.LR_PROMPT}”, which marks "
+                "a photo of people whose caption names none of them.\n\n"
+                "(FancyAnalyzer writes the list, beside the list of conventions.)\n\n"
+                f"Open {name} anyway?",
+                icon="warning", parent=self.root):
+            self.set_status(f"{name} not opened.")
+            return 0
         self.set_status(f"Reading {name}…")
         self.root.config(cursor="watch")
         self.root.update_idletasks()
         try:
-            photos = PdfPhotos.read_pdf(pdf_path, cons)
+            photos = PdfPhotos.read_pdf(pdf_path, cons, people)
         except Exception as e:
             logger.exception(f"Could not read {pdf_path}")
             messagebox.showerror("Cannot Read PDF", f"Could not read {name}:\n\n{e}",
@@ -1051,6 +1065,33 @@ class PhotosUploader:
             where = ""
         return Path(where) if where else (_SCRIPT_DIR.parent / "FancyAnalyzer" / "Reports"
                                           / "Convention timeline (Fancy).txt")
+
+    def _people_names(self):
+        """The first names of fans, from FancyAnalyzer's list of people's
+        names, to tell whether a caption names anyone; None if it cannot be
+        found.  As with the con list, not finding it is not remembered."""
+        if not self._people_cache:
+            path = self._people_names_path()
+            try:
+                self._people_cache.append(PdfPhotos.PeopleNames.load(path))
+            except Exception as e:
+                logger.warning(f"No list of people's names, so no \"L-R: ??\" for PDF photos: {path}: {e}")
+                return None
+        return self._people_cache[0]
+
+    def _people_names_path(self) -> Path:
+        """Beside the con list: FancyAnalyzer writes both."""
+        return self._con_list_path().parent / "Peoples names.txt"
+
+    # SlideShow's face detector, bundled beside the program
+    _FACE_MODEL = "face_detection_yunet_2023mar.onnx"
+
+    def _has_faces(self, path: str) -> bool:
+        item = self._pdf_items.get(path, {})
+        if "faces" not in item:
+            model = Path(getattr(sys, "_MEIPASS", _SCRIPT_DIR)) / self._FACE_MODEL
+            item["faces"] = bool(PdfPhotos.has_faces(path, model))
+        return item["faces"]
 
     def _mark_pdf_done(self, path: str | None):
         """A photo from a PDF has been uploaded or skipped: opening the PDF
@@ -1187,9 +1228,13 @@ class PhotosUploader:
         # never the file's own date, which is today's
         self.custom_vars['photo_source'].set(p.source)
         self.custom_vars['date_of_photo'].set(p.date)
+        text = p.caption
+        # A photo of people whose caption names none of them: ask who they are
+        if p.named is False and self._has_faces(path):
+            text = f"{text} {PdfPhotos.LR_PROMPT}".strip()
         caption = self.custom_vars['comments']
         caption.delete('1.0', "end")
-        caption.insert('1.0', p.caption)
+        caption.insert('1.0', text)
         tags = [t.strip() for t in self.custom_vars['tags'].get().split(',') if t.strip()] \
             if self.persist_vars['tags'].get() else []
         if p.tags and p.tags not in tags:

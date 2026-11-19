@@ -130,3 +130,25 @@ March 13-15, 2020||[[Corflu 37]]&nbsp;&nbsp;&nbsp;<small>(College Station, TX)</
 def make_timeline(path: Path) -> Path:
     path.write_text(TIMELINE, encoding="utf-8")
     return path
+
+
+# A few lines of FancyAnalyzer's "Peoples names.txt": two Joes and two Robs,
+# so they count alone
+PEOPLE = """Bob Tucker
+Liz Danforth
+Al Standish
+Nate Bucklin
+Joe Siclari
+Joe Haldeman
+Rob Hansen
+Rob Jackson (UK)
+Sandi Cupp
+The Count
+Sunday Smith
+Sunday Jones
+"""
+
+
+def make_people(path: Path) -> Path:
+    path.write_text(PEOPLE, encoding="utf-8")
+    return path

@@ -31,6 +31,8 @@ class _Pdf(base._Fixture):
         self.pdf = _slides.make_slideshow(self.work / "Slide Show.pdf")
         cons = pu.PdfPhotos.ConList.load(_slides.make_timeline(self.work / "timeline.txt"))
         self.app._con_list_cache = [cons]
+        self.app._people_cache = [pu.PdfPhotos.PeopleNames.load(
+            _slides.make_people(self.work / "Peoples names.txt"))]
         self.asked = []
         self.answer = True
         pu.messagebox.askyesno = self.ask
@@ -285,6 +287,96 @@ class NoConventionList(_Pdf, unittest.TestCase):
 
     def test_no_warning_when_it_is_found(self):
         _slides.make_timeline(self.work / "not there.txt")
+        self.open_pdf()
+        self.assertEqual(self.warned, [])
+
+
+class LeftToRight(_Pdf, unittest.TestCase):
+    """"L-R: ??" on the caption of a photo of people that names none of them.
+    The test slides are flat colour, so whether a photo has faces is set."""
+
+    def setUp(self):
+        super().setUp()
+        self.faces = True
+        self.looked = []
+        pu.PdfPhotos.has_faces, self.saved_has_faces = (
+            lambda path, model: (self.looked.append(path), self.faces)[1], pu.PdfPhotos.has_faces)
+
+    def tearDown(self):
+        pu.PdfPhotos.has_faces = self.saved_has_faces
+        super().tearDown()
+
+    def caption_of(self, key):
+        self.show(ALL.index(key))
+        return self.fields()["caption"]
+
+    def test_people_but_no_names(self):
+        self.open_pdf()
+        self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing L-R: ??")
+
+    def test_no_people(self):
+        self.faces = False
+        self.open_pdf()
+        self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing")
+
+    def test_names_already(self):
+        self.open_pdf()
+        self.assertEqual(self.caption_of("p002"), "Bob Tucker & Pat Virzi at Corflu IV — Covington, KY")
+        self.assertEqual(self.looked, [], "no need to look for faces")
+
+    def test_once_a_photo(self):
+        self.open_pdf()
+        self.caption_of("p004")
+        self.app.custom_vars['comments'].delete('1.0', 'end')
+        self.app.custom_vars['comments'].insert('1.0', "Not-A-D-Con outing L-R: Joe, Rob")
+        self.show(0)
+        self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing L-R: Joe, Rob")
+        self.assertEqual(len(self.looked), 1)
+
+    def test_the_real_detector_and_model(self):
+        """Wired to the model beside the program: a flat colour has no face."""
+        pu.PdfPhotos.has_faces = self.saved_has_faces
+        self.open_pdf()
+        self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing")
+        self.assertIs(self.app._pdf_items[self.app.current_photo]["faces"], False)
+
+
+class NoPeopleList(_Pdf, unittest.TestCase):
+    """Without the list of people's names, opening a PDF says so first; then
+    no caption gets "L-R: ??"."""
+
+    def setUp(self):
+        super().setUp()
+        self.app._people_cache = []
+        (self.work / "Peoples names.txt").unlink()
+        pu._store.set_op_param("con_timeline_file", str(self.work / "timeline.txt"))
+        self.warned = []
+        self.go_on = True
+        pu.messagebox.askokcancel = lambda title, msg, **k: (self.warned.append((title, msg)),
+                                                             self.go_on)[1]
+        pu.PdfPhotos.has_faces, self.saved_has_faces = (lambda path, model: True,
+                                                        pu.PdfPhotos.has_faces)
+
+    def tearDown(self):
+        pu.PdfPhotos.has_faces = self.saved_has_faces
+        super().tearDown()
+
+    def test_it_warns_and_says_where_it_looked(self):
+        self.open_pdf()
+        self.assertEqual([t for t, _m in self.warned], ["People's Names Not Found"])
+        self.assertIn(str(self.work / "Peoples names.txt"), self.warned[0][1])
+
+    def test_cancel_opens_nothing(self):
+        self.go_on = False
+        self.assertEqual(self.open_pdf(), 0)
+
+    def test_ok_opens_it_without(self):
+        self.assertEqual(self.open_pdf(), 7)
+        self.show(ALL.index("p004"))
+        self.assertEqual(self.fields()["caption"], "Not-A-D-Con outing")
+
+    def test_found_beside_the_con_list(self):
+        _slides.make_people(self.work / "Peoples names.txt")
         self.open_pdf()
         self.assertEqual(self.warned, [])
 
