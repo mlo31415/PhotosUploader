@@ -986,9 +986,12 @@ class PhotosUploader:
         self.set_status(f"Reading {name}…")
         self.root.config(cursor="watch")
         self.root.update_idletasks()
+        report, close = self._pdf_progress(pdf_path)
         try:
-            photos = PdfPhotos.read_pdf(pdf_path, cons, people)
+            photos = PdfPhotos.read_pdf(pdf_path, cons, people,
+                                        progress=lambda n, of: report("Reading slides", n, of))
         except Exception as e:
+            close()
             logger.exception(f"Could not read {pdf_path}")
             messagebox.showerror("Cannot Read PDF", f"Could not read {name}:\n\n{e}",
                                  parent=self.root)
@@ -997,6 +1000,7 @@ class PhotosUploader:
         finally:
             self.root.config(cursor="")
         if not photos:
+            close()
             messagebox.showinfo("No Photos", f"No photos were found in {name}.",
                                 parent=self.root)
             self.set_status(f"No photos in {name}.")
@@ -1005,6 +1009,7 @@ class PhotosUploader:
         done = set(self.state_data.get(self._PDF_PROGRESS_KEY, {}).get(name, []))
         todo = [p for p in photos if p.key not in done]
         if not todo:
+            close()
             if not messagebox.askyesno(
                     "All Photos Done",
                     f"All {len(photos)} photos in “{name}” have been uploaded or skipped.\n\n"
@@ -1014,6 +1019,7 @@ class PhotosUploader:
             self.state_data.get(self._PDF_PROGRESS_KEY, {}).pop(name, None)
             self._save_state_quietly()
             todo = photos
+            report, close = self._pdf_progress(pdf_path)
 
         if self._pdf_temp_root is None:
             self._pdf_temp_root = tempfile.mkdtemp(prefix="PhotosUploader PDF ")
@@ -1022,14 +1028,17 @@ class PhotosUploader:
         self.root.config(cursor="watch")
         self.root.update_idletasks()
         try:
-            paths = PdfPhotos.save_photos(pdf_path, todo, folder)
+            paths = PdfPhotos.save_photos(pdf_path, todo, folder,
+                                          progress=lambda n, of: report("Taking out photos", n, of))
         except Exception as e:
+            close()
             logger.exception(f"Could not extract photos from {pdf_path}")
             messagebox.showerror("Cannot Read PDF",
                                  f"Could not take the photos out of {name}:\n\n{e}",
                                  parent=self.root)
             return 0
         finally:
+            close()
             self.root.config(cursor="")
 
         added = 0
@@ -1041,6 +1050,55 @@ class PhotosUploader:
         self.set_status(f"Added {added} photo(s) from {name}"
                         + (f"; {left_out} already uploaded or skipped." if left_out else "."))
         return added
+
+    # A PDF bigger than this shows its progress while it is read: the 70 MB
+    # LAcon V slide show takes some five seconds
+    _PDF_PROGRESS_BYTES = 10 * 1024 * 1024
+
+    def _pdf_progress(self, pdf_path: str):
+        """A progress dialog for opening a big PDF: (report, close).
+        report(stage, done, total) moves it on; close() takes it down, and may
+        be called more than once.  For a small PDF neither does anything."""
+        try:
+            big = os.path.getsize(pdf_path) > self._PDF_PROGRESS_BYTES
+        except OSError:
+            big = False
+        if not big:
+            return (lambda *_a: None), (lambda: None)
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Opening PDF…")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.protocol("WM_DELETE_WINDOW", lambda: None)
+        dlg.config(cursor="watch")
+        alive = [True]
+        dlg.bind("<Destroy>", lambda _e: alive.__setitem__(0, False))
+        ttk.Label(dlg, text=f"Opening  {os.path.basename(pdf_path)}",
+                  padding=(16, 12, 16, 8)).pack()
+        pbar = ttk.Progressbar(dlg, mode='determinate', length=320)
+        pbar.pack(padx=16, pady=(0, 8))
+        stage_var = tk.StringVar(value="Reading slides…")
+        ttk.Label(dlg, textvariable=stage_var, foreground="gray",
+                  padding=(16, 0, 16, 12)).pack()
+        self._center_dialog(dlg)
+        dlg.grab_set()
+        dlg.update()
+
+        def report(stage: str, done: int, total: int):
+            if not alive[0]:
+                return
+            stage_var.set(f"{stage}: {done} of {total}")
+            pbar.config(maximum=max(total, 1), value=done)
+            # The work is on this thread: let the dialog draw, and keep
+            # Windows from calling the program not responding
+            dlg.update()
+
+        def close():
+            if alive[0]:
+                dlg.grab_release()
+                dlg.destroy()
+        return report, close
 
     def _con_list(self):
         """The cons and their dates, from FancyAnalyzer's convention timeline;

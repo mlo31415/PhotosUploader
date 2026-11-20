@@ -290,6 +290,33 @@ class ThePdf(unittest.TestCase):
     def test_not_known_without_the_list(self):
         self.assertTrue(all(p.named is None for p in self.photos.values()))
 
+    def test_reading_reports_its_progress(self):
+        calls = []
+        PdfPhotos.read_pdf(self.pdf, progress=lambda n, of: calls.append((n, of)))
+        self.assertEqual(calls, [(n, 8) for n in range(9)], "before each page, and at the end")
+
+    def test_saving_reports_its_progress(self):
+        out = self.work / "progress"
+        out.mkdir()
+        calls = []
+        PdfPhotos.save_photos(self.pdf, list(self.photos.values()), out,
+                              progress=lambda n, of: calls.append((n, of)))
+        self.assertEqual(calls, [(n, 7) for n in range(8)])
+
+    def test_a_long_pdf_name_is_cut_to_25_characters(self):
+        long = self.work / "Celebrating Friendship slide show_Sullivan-Virzi_LAcon V.pdf"
+        shutil.copy(self.pdf, long)
+        out = self.work / "long"
+        out.mkdir()
+        paths = PdfPhotos.save_photos(long, [self.photos["p002"]], out)
+        self.assertEqual(Path(paths[0]).name, "Celebrating Friendship sl p002.jpg")
+
+    def test_the_cut_leaves_no_space_or_punctuation_at_the_end(self):
+        self.assertEqual(PdfPhotos.photo_stem("Celebrating Friendship  _ slides.pdf"),
+                         "Celebrating Friendship")
+        self.assertEqual(PdfPhotos.photo_stem("Exactly twenty-five chars.pdf"),
+                         "Exactly twenty-five chars")
+
     def test_saved_as_they_are_in_the_pdf(self):
         out = self.work / "out"
         out.mkdir()

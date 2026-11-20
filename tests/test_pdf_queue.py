@@ -83,6 +83,12 @@ class Opening(_Pdf, unittest.TestCase):
         self.assertEqual([os.path.basename(p) for p in self.app.input_paths][:3],
                          ["Slide Show p002.jpg", "Slide Show p003-1.jpg", "Slide Show p003-2.jpg"])
 
+    def test_a_long_pdf_name_is_cut_in_the_photos_names(self):
+        long = self.work / "Celebrating Friendship slide show_Sullivan-Virzi_LAcon V.pdf"
+        shutil.copy(self.pdf, long)
+        self.open_pdf(long)
+        self.assertEqual(os.path.basename(self.app.input_paths[0]), "Celebrating Friendship sl p002.jpg")
+
     def test_opening_it_twice_does_not_queue_it_twice(self):
         self.open_pdf()
         self.assertEqual(self.open_pdf(), 0)
@@ -289,6 +295,66 @@ class NoConventionList(_Pdf, unittest.TestCase):
         _slides.make_timeline(self.work / "not there.txt")
         self.open_pdf()
         self.assertEqual(self.warned, [])
+
+
+class Progress(_Pdf, unittest.TestCase):
+    """A big PDF shows its progress while it is read; a small one only the
+    wait cursor.  The test PDF is small, so what counts as big is lowered."""
+
+    def setUp(self):
+        super().setUp()
+        self.seen = []           # (stage text, bar value, bar maximum) while working
+        real_read, real_save = pu.PdfPhotos.read_pdf, pu.PdfPhotos.save_photos
+        self.saved_fns = real_read, real_save
+
+        def watch(real):
+            def call(*a, **k):
+                inner = k.get("progress")
+
+                def progress(n, of):
+                    inner(n, of)
+                    dlg = self.dialog()
+                    if dlg:
+                        stage = [w for w in dlg.winfo_children() if isinstance(w, pu.ttk.Label)][1]
+                        bar = [w for w in dlg.winfo_children() if isinstance(w, pu.ttk.Progressbar)][0]
+                        self.seen.append((stage.cget("text"), int(float(bar.cget("value"))),
+                                          int(float(bar.cget("maximum")))))
+                k["progress"] = progress
+                return real(*a, **k)
+            return call
+        pu.PdfPhotos.read_pdf, pu.PdfPhotos.save_photos = watch(real_read), watch(real_save)
+
+    def tearDown(self):
+        pu.PdfPhotos.read_pdf, pu.PdfPhotos.save_photos = self.saved_fns
+        super().tearDown()
+
+    def dialog(self):
+        for w in self.root.winfo_children():
+            if isinstance(w, pu.tk.Toplevel) and w.winfo_exists() and w.title() == "Opening PDF…":
+                return w
+        return None
+
+    def test_a_big_pdf_shows_it(self):
+        self.app._PDF_PROGRESS_BYTES = 0
+        self.open_pdf()
+        self.assertIn(("Reading slides: 3 of 8", 3, 8), self.seen)
+        self.assertIn(("Taking out photos: 7 of 7", 7, 7), self.seen)
+
+    def test_and_takes_it_down(self):
+        self.app._PDF_PROGRESS_BYTES = 0
+        self.open_pdf()
+        self.assertIsNone(self.dialog())
+
+    def test_also_when_all_are_done_and_it_starts_over(self):
+        self.app._PDF_PROGRESS_BYTES = 0
+        self.app.state_data["pdf_progress"] = {"Slide Show.pdf": list(ALL)}
+        self.assertEqual(self.open_pdf(), 7)
+        self.assertIn(("Taking out photos: 7 of 7", 7, 7), self.seen)
+        self.assertIsNone(self.dialog())
+
+    def test_a_small_pdf_does_not(self):
+        self.open_pdf()
+        self.assertEqual(self.seen, [])
 
 
 class LeftToRight(_Pdf, unittest.TestCase):

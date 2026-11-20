@@ -600,12 +600,15 @@ def _text(lines: list[str]) -> str:
 
 
 def read_pdf(pdf_path: "str | Path", cons: ConList | None = None,
-             people: PeopleNames | None = None) -> list[PdfPhoto]:
+             people: PeopleNames | None = None, progress=None) -> list[PdfPhoto]:
     """Every photo in the PDF, with its caption, date, source and con, and
-    whether the caption names anyone (if people is given)."""
+    whether the caption names anyone (if people is given).
+    progress(done, total), if given, is called after each page."""
     photos = []
     with pymupdf.open(str(pdf_path)) as doc:
         for pno, page in enumerate(doc, 1):
+            if progress:
+                progress(pno - 1, len(doc))
             placed = _photos_on(page)
             if not placed:
                 continue
@@ -641,6 +644,8 @@ def read_pdf(pdf_path: "str | Path", cons: ConList | None = None,
                     p.notes.append("The slide has more than one credit line; "
                                    "check that this one is the photo's.")
                 photos.append(p)
+        if progress:
+            progress(len(doc), len(doc))
     return photos
 
 
@@ -689,14 +694,29 @@ def _describe(key: str, pno: int, xref: int, caption: str, credit_lines: list[st
 # ---------------------------------------------------------------------------
 # The image itself
 # ---------------------------------------------------------------------------
-def save_photos(pdf_path: "str | Path", photos: list[PdfPhoto], folder: "str | Path") -> list[str]:
-    """Write each photo to folder as "<PDF name> <key>.jpg" (or .png), and
-    return the paths, in the same order.  A file already there is left as it
-    is: it may be one the queue already has, and the user may have edited it."""
+_MAX_STEM = 25            # characters of the PDF's name that go into a photo's
+
+
+def photo_stem(pdf_path: "str | Path") -> str:
+    """The PDF's name as it begins its photos' names: cut to 25 characters,
+    less any space or punctuation the cut leaves at the end."""
     stem = Path(pdf_path).stem
+    return stem if len(stem) <= _MAX_STEM else stem[:_MAX_STEM].rstrip(" _-.,;")
+
+
+def save_photos(pdf_path: "str | Path", photos: list[PdfPhoto], folder: "str | Path",
+                progress=None) -> list[str]:
+    """Write each photo to folder as "<PDF name> <key>.jpg" (or .png), and
+    return the paths, in the same order.  The PDF's name is cut to 25
+    characters (photo_stem).  A file already there is left as it is: it may
+    be one the queue already has, and the user may have edited it.
+    progress(done, total), if given, is called after each photo."""
+    stem = photo_stem(pdf_path)
     paths = []
     with pymupdf.open(str(pdf_path)) as doc:
-        for p in photos:
+        for n, p in enumerate(photos, 1):
+            if progress:
+                progress(n - 1, len(photos))
             data, ext = None, ""
             for e in (".jpg", ".png", ".jpx", ".bmp", ".tif"):
                 if (Path(folder) / f"{stem} {p.key}{e}").exists():
@@ -708,6 +728,8 @@ def save_photos(pdf_path: "str | Path", photos: list[PdfPhoto], folder: "str | P
             if data is not None:
                 out.write_bytes(data)
             paths.append(str(out))
+        if progress:
+            progress(len(photos), len(photos))
     return paths
 
 
