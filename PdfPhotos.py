@@ -694,21 +694,32 @@ def _describe(key: str, pno: int, xref: int, caption: str, credit_lines: list[st
 # ---------------------------------------------------------------------------
 # The image itself
 # ---------------------------------------------------------------------------
-_MAX_STEM = 25            # characters of the PDF's name that go into a photo's
+# How much of the PDF's name goes into a photo's: a cut at a word break that
+# leaves 18 to 27 characters, or else at 25
+_STEM_MIN, _STEM_MAX, _STEM_CUT = 18, 27, 25
+_STEM_END = " _-.,;"      # not left at the end of a cut
 
 
 def photo_stem(pdf_path: "str | Path") -> str:
-    """The PDF's name as it begins its photos' names: cut to 25 characters,
+    """The PDF's name as it begins its photos' names.  Up to 27 characters it
+    is all there; a longer one is cut at its last word break (a space or an
+    underscore) that leaves 18 to 27 characters -- or, if none does, at 25 --
     less any space or punctuation the cut leaves at the end."""
     stem = Path(pdf_path).stem
-    return stem if len(stem) <= _MAX_STEM else stem[:_MAX_STEM].rstrip(" _-.,;")
+    if len(stem) <= _STEM_MAX:
+        return stem
+    for m in reversed(list(re.finditer(r"[\s_]+", stem))):
+        head = stem[:m.start()].rstrip(_STEM_END)
+        if _STEM_MIN <= len(head) <= _STEM_MAX:
+            return head
+    return stem[:_STEM_CUT].rstrip(_STEM_END)
 
 
 def save_photos(pdf_path: "str | Path", photos: list[PdfPhoto], folder: "str | Path",
                 progress=None) -> list[str]:
     """Write each photo to folder as "<PDF name> <key>.jpg" (or .png), and
-    return the paths, in the same order.  The PDF's name is cut to 25
-    characters (photo_stem).  A file already there is left as it is: it may
+    return the paths, in the same order.  A long PDF name is cut short
+    (photo_stem).  A file already there is left as it is: it may
     be one the queue already has, and the user may have edited it.
     progress(done, total), if given, is called after each photo."""
     stem = photo_stem(pdf_path)

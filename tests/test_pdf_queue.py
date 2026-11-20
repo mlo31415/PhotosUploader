@@ -83,11 +83,11 @@ class Opening(_Pdf, unittest.TestCase):
         self.assertEqual([os.path.basename(p) for p in self.app.input_paths][:3],
                          ["Slide Show p002.jpg", "Slide Show p003-1.jpg", "Slide Show p003-2.jpg"])
 
-    def test_a_long_pdf_name_is_cut_in_the_photos_names(self):
+    def test_a_long_pdf_name_is_cut_short_in_the_photos_names(self):
         long = self.work / "Celebrating Friendship slide show_Sullivan-Virzi_LAcon V.pdf"
         shutil.copy(self.pdf, long)
         self.open_pdf(long)
-        self.assertEqual(os.path.basename(self.app.input_paths[0]), "Celebrating Friendship sl p002.jpg")
+        self.assertEqual(os.path.basename(self.app.input_paths[0]), "Celebrating Friendship p002.jpg")
 
     def test_opening_it_twice_does_not_queue_it_twice(self):
         self.open_pdf()

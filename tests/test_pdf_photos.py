@@ -303,19 +303,14 @@ class ThePdf(unittest.TestCase):
                               progress=lambda n, of: calls.append((n, of)))
         self.assertEqual(calls, [(n, 7) for n in range(8)])
 
-    def test_a_long_pdf_name_is_cut_to_25_characters(self):
+    def test_a_long_pdf_name_is_cut_at_a_word(self):
         long = self.work / "Celebrating Friendship slide show_Sullivan-Virzi_LAcon V.pdf"
         shutil.copy(self.pdf, long)
         out = self.work / "long"
         out.mkdir()
         paths = PdfPhotos.save_photos(long, [self.photos["p002"]], out)
-        self.assertEqual(Path(paths[0]).name, "Celebrating Friendship sl p002.jpg")
+        self.assertEqual(Path(paths[0]).name, "Celebrating Friendship p002.jpg")
 
-    def test_the_cut_leaves_no_space_or_punctuation_at_the_end(self):
-        self.assertEqual(PdfPhotos.photo_stem("Celebrating Friendship  _ slides.pdf"),
-                         "Celebrating Friendship")
-        self.assertEqual(PdfPhotos.photo_stem("Exactly twenty-five chars.pdf"),
-                         "Exactly twenty-five chars")
 
     def test_saved_as_they_are_in_the_pdf(self):
         out = self.work / "out"
@@ -341,6 +336,36 @@ class ThePdf(unittest.TestCase):
         (out / "Slide Show p002.jpg").write_bytes(b"edited")
         PdfPhotos.save_photos(self.pdf, [self.photos["p002"]], out)
         self.assertEqual((out / "Slide Show p002.jpg").read_bytes(), b"edited")
+
+
+class PhotoStem(unittest.TestCase):
+    """How much of a PDF's name begins its photos' names."""
+
+    def stem(self, name):
+        return PdfPhotos.photo_stem(name + ".pdf")
+
+    def test_up_to_27_characters_all_of_it(self):
+        self.assertEqual(self.stem("A name of twenty-seven char"), "A name of twenty-seven char")
+        self.assertEqual(self.stem("Slide Show"), "Slide Show")
+
+    def test_longer_at_the_last_word_break_that_leaves_18_to_27(self):
+        self.assertEqual(self.stem("One two three four five six seven eight"),
+                         "One two three four five six")                     # 27
+        self.assertEqual(self.stem("Celebrating Friendship slide show"), "Celebrating Friendship")
+
+    def test_an_underscore_is_a_word_break_and_a_hyphen_is_not(self):
+        self.assertEqual(self.stem("Celebrating_Friendship_slide_show"), "Celebrating_Friendship")
+        self.assertEqual(self.stem("The Sullivan-Virzi-Haskell-Lien show"), "The Sullivan-Virzi-Haskel")
+
+    def test_otherwise_at_25(self):
+        self.assertEqual(self.stem("Short words then Supercalifragilisticexpialidocious"),
+                         "Short words then Supercal")
+        self.assertEqual(self.stem("Supercalifragilisticexpialidocious slides"),
+                         "Supercalifragilisticexpia")
+
+    def test_no_space_or_punctuation_left_at_the_end(self):
+        self.assertEqual(self.stem("Celebrating Friendship  _ slides and more"), "Celebrating Friendship")
+        self.assertEqual(self.stem("Twenty-four characters, then more"), "Twenty-four characters")
 
 
 if __name__ == "__main__":
