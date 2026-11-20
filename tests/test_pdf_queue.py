@@ -357,9 +357,8 @@ class Progress(_Pdf, unittest.TestCase):
         self.assertEqual(self.seen, [])
 
 
-class LeftToRight(_Pdf, unittest.TestCase):
-    """"L-R: ??" on the caption of a photo of people that names none of them.
-    The test slides are flat colour, so whether a photo has faces is set."""
+class _Faces(_Pdf):
+    """The test slides are flat colour, so whether a photo has faces is set."""
 
     def setUp(self):
         super().setUp()
@@ -376,6 +375,10 @@ class LeftToRight(_Pdf, unittest.TestCase):
         self.show(ALL.index(key))
         return self.fields()["caption"]
 
+
+class LeftToRight(_Faces, unittest.TestCase):
+    """"L-R: ??" on the caption of a photo of people that names none of them."""
+
     def test_people_but_no_names(self):
         self.open_pdf()
         self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing L-R: ??")
@@ -388,7 +391,6 @@ class LeftToRight(_Pdf, unittest.TestCase):
     def test_names_already(self):
         self.open_pdf()
         self.assertEqual(self.caption_of("p002"), "Bob Tucker & Pat Virzi at Corflu IV — Covington, KY")
-        self.assertEqual(self.looked, [], "no need to look for faces")
 
     def test_once_a_photo(self):
         self.open_pdf()
@@ -397,7 +399,7 @@ class LeftToRight(_Pdf, unittest.TestCase):
         self.app.custom_vars['comments'].insert('1.0', "Not-A-D-Con outing L-R: Joe, Rob")
         self.show(0)
         self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing L-R: Joe, Rob")
-        self.assertEqual(len(self.looked), 1)
+        self.assertEqual(self.looked.count(self.app.input_paths[ALL.index("p004")]), 1)
 
     def test_the_real_detector_and_model(self):
         """Wired to the model beside the program: a flat colour has no face."""
@@ -405,6 +407,47 @@ class LeftToRight(_Pdf, unittest.TestCase):
         self.open_pdf()
         self.assertEqual(self.caption_of("p004"), "Not-A-D-Con outing")
         self.assertIs(self.app._pdf_items[self.app.current_photo]["faces"], False)
+
+
+class NeedsId(_Faces, unittest.TestCase):
+    """The Needs-ID tag on every photo from a PDF with a person in it, named
+    or not."""
+
+    def test_a_photo_of_people_gets_it(self):
+        self.open_pdf()
+        self.show(0)
+        self.assertEqual(self.fields()["tags"], "Corflu 4, Needs-ID")
+        self.show(ALL.index("p004"))
+        self.assertEqual(self.fields()["tags"], "Needs-ID")
+
+    def test_one_with_no_one_in_it_does_not(self):
+        self.faces = False
+        self.open_pdf()
+        self.show(0)
+        self.assertEqual(self.fields()["tags"], "Corflu 4")
+
+    def test_once_with_kept_tags(self):
+        self.app.persist_vars['tags'].set(True)
+        self.open_pdf()
+        self.show(0)
+        self.show(1)
+        self.assertEqual(self.fields()["tags"], "Corflu 4, Needs-ID")
+
+    def test_taken_off_by_the_user_it_stays_off(self):
+        self.open_pdf()
+        self.show(0)
+        self.app._toggle_needs_id_tag()
+        self.show(1)
+        self.show(0)
+        self.assertEqual(self.fields()["tags"], "Corflu 4")
+
+    def test_not_an_ordinary_photo(self):
+        path = str(self.photos / "ordinary.jpg")
+        base.Image.new("RGB", (60, 40), "#3080c0").save(path)
+        self.app._add_single_image(path, {})
+        self.show(0)
+        self.assertNotIn("Needs-ID", self.fields()["tags"])
+        self.assertEqual(self.looked, [])
 
 
 class NoPeopleList(_Pdf, unittest.TestCase):

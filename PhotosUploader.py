@@ -1297,6 +1297,10 @@ class PhotosUploader:
             if self.persist_vars['tags'].get() else []
         if p.tags and p.tags not in tags:
             tags.append(p.tags)
+        # A photo of people: who is who is for someone to say, even where the
+        # slide names them -- it does not say who is where
+        if self._has_faces(path) and 'Needs-ID' not in tags:
+            tags.append('Needs-ID')
         self.custom_vars['tags'].set(', '.join(tags))
         self._validate_caption_field()
         self._validate_date_field()
